@@ -3,3 +3,9 @@ __pycache__/
 .numba_cache/
 .u2net/
 training_data_no_bg/
+saved_vectors/
+training_data_no_bg/
+.u2net/
+__pycache__/
+*.pyc
+.numba_cache/

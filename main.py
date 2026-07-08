@@ -1,12 +1,11 @@
-import DINO as DN
 import __utils__ as ut
 
-def main(data_location, bckgnd_rmv = True):
-    if bckgnd_rmv == True:
-        no_bg_location = "training_data_no_bg"
-        ut.rmv_bckgnd(data_location, no_bg_location)
-        data_location = no_bg_location
-    X, Y, paths, data = DN.DINO_Vector(data_location)
-    return X, Y, paths, data
+X, Y, paths, classes = ut.create_dataset(
+    data_location="training_data",
+    bckgnd_rmv = True
+)
 
-print(main(data_location = "training_data", bckgnd_rmv = True))
+print("X shape:", X.shape)
+print("Y:", Y)
+print("Classes:", classes)
+print("Paths:", paths)
