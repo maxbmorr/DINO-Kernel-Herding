@@ -165,18 +165,19 @@ Then it learns thresholds from data the classifier did not train on:
 saved_vectors/testing/
 ```
 
-It marks an image as interesting if either:
+It marks an image as a candidate only when all of these are true:
 
-- entropy is high, meaning the KDE class probabilities are uncertain
-- density is low, meaning the embedding does not fit well inside the learned class patterns
+- entropy is low, meaning the model is confident about that class
+- the image is in-distribution, meaning it is not a complete KDE outlier
+- representation gap is high, meaning it is not close to the learned examples already in that class
 
-It also marks `complete_outlier` for images with extremely low density. Those are still shown in the scores and graphs, but Kernel Herding avoids them when choosing the final set. This keeps the selected images interesting without filling the selection with data points that are completely detached from the learned distribution.
+It still marks `complete_outlier` for images with extremely low density. Those are shown in the scores and graphs, but they are not part of the candidate subset.
 
 Second, it creates an `interesting_subset.csv` file from only the target/test/unlabeled images that are interesting but not complete outliers. This is the small side-group of the data you care about.
 
 Thresholds are learned separately for each class. For labeled test data, the code uses the actual class label. For unlabeled data, it uses the predicted class. This means an interesting zoomed-out cow affects the cow subset, but it does not change the pig subset.
 
-Third, it applies Kernel Herding separately inside each class-specific candidate subset. This chooses a few representative examples per class-specific subset. That matters because taking only the highest entropy images can give you many very similar examples.
+Third, it applies Kernel Herding separately inside each class-specific candidate subset. This chooses a few representative examples per class-specific poorly represented subset.
 
 Running `main.py` with `RUN_ENTROPY_CALCULATOR = True` writes:
 
@@ -192,6 +193,7 @@ saved_vectors/testing/target_entropy_density_plot.png
 saved_vectors/testing/target_pca_plot.png
 saved_vectors/testing/target_subset_entropy_density_plot.png
 saved_vectors/testing/target_subset_pca_plot.png
+saved_vectors/testing/class_subset_graphs/
 ```
 
 Important columns:
@@ -200,7 +202,12 @@ Important columns:
 - `class_probability`: probability of that class
 - `entropy`: uncertainty across classes
 - `best_log_density`: how strongly the image fits its best class KDE
-- `interesting`: `True` when the image crosses the learned entropy or density threshold
+- `low_entropy`: `True` when the image is confidently assigned to its threshold class
+- `in_distribution`: `True` when the image is not a complete KDE outlier
+- `representation_score`: similarity to the closest learned example in that class
+- `representation_gap`: `1 - representation_score`; higher means less represented by learned examples
+- `poorly_represented`: `True` when representation gap is high for that class
+- `interesting`: `True` when the image is confident, in-distribution, and poorly represented
 - `complete_outlier`: `True` when the image is too far outside the learned density
 - `herding_candidate`: `True` when the image is in the small candidate subset
 - `herding_selected`: `True` when Kernel Herding selected the image
@@ -218,6 +225,10 @@ The graph files show:
 - `target_pca_plot.png`: a 2D PCA view of the target candidates, with Kernel Herding selections circled
 - `target_subset_entropy_density_plot.png`: only the small candidate subset, with Kernel Herding selections circled
 - `target_subset_pca_plot.png`: only the small candidate subset in 2D PCA space, with Kernel Herding selections circled
+- `class_subset_graphs/<class name>/representation_gap_entropy.png`: one class-specific subset graph per class
+- `class_subset_graphs/<class name>/pca_subset.png`: one class-specific PCA subset graph per class
+
+In each class folder, `representation_gap_entropy.png` shows all target images for that class in the background, the candidate subset on top, and Kernel Herding selections circled. The dashed horizontal line is the class-specific low-entropy cutoff. The dashed vertical line is the class-specific high-representation-gap cutoff. Candidate points are the class points that fall below the entropy cutoff and to the right of the representation-gap cutoff, while also not being complete KDE outliers.
 
 ## COCO Classifier
 

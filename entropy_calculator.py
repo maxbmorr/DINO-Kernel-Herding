@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from pathlib import Path
+import re
 
 import numpy as np
 import pandas as pd
@@ -18,16 +19,24 @@ class EntropyModel:
     class_names: list
     priors: np.ndarray
     kde_by_class: dict
+    training_embeddings_by_class: dict
     entropy_threshold: float
     density_threshold: float
     outlier_density_threshold: float
+    representation_gap_threshold: float
     class_thresholds: dict
+    gamma: float
     bandwidth: float
 
 
 def _filter_labeled_rows(X, label_ids, metadata):
     labeled_mask = label_ids >= 0
     return X[labeled_mask], label_ids[labeled_mask], metadata[labeled_mask]
+
+
+def safe_folder_name(name):
+    safe_name = re.sub(r"[^A-Za-z0-9._-]+", "_", str(name).strip())
+    return safe_name.strip("_") or "unknown"
 
 
 def _logsumexp(values, axis=1):
@@ -47,8 +56,8 @@ def fit_entropy_model(
     learning_dir="saved_vectors/learning",
     calibration_dir="saved_vectors/testing",
     bandwidth=2.0,
-    entropy_percentile=95,
-    density_percentile=5,
+    entropy_percentile=25,
+    density_percentile=75,
     outlier_density_percentile=1,
     min_class_samples=2,
 ):
@@ -66,6 +75,7 @@ def fit_entropy_model(
     X_train_scaled = scaler.fit_transform(X_train)
 
     kde_by_class = {}
+    training_embeddings_by_class = {}
     class_ids = []
     class_names = []
     priors = []
@@ -84,6 +94,7 @@ def fit_entropy_model(
         kde.fit(X_train_scaled[class_indices])
 
         kde_by_class[int(label_id)] = kde
+        training_embeddings_by_class[int(label_id)] = X_train_scaled[class_indices]
         class_ids.append(int(label_id))
         class_names.append(class_name)
         priors.append(len(class_indices) / len(train_label_ids))
@@ -97,10 +108,13 @@ def fit_entropy_model(
         class_names=class_names,
         priors=np.array(priors),
         kde_by_class=kde_by_class,
+        training_embeddings_by_class=training_embeddings_by_class,
         entropy_threshold=0.0,
         density_threshold=0.0,
         outlier_density_threshold=0.0,
+        representation_gap_threshold=0.0,
         class_thresholds={},
+        gamma=1.0 / X_train_scaled.shape[1],
         bandwidth=bandwidth,
     )
 
@@ -114,6 +128,9 @@ def fit_entropy_model(
     model.outlier_density_threshold = float(
         np.percentile(calibration_scores["best_log_density"], outlier_density_percentile)
     )
+    model.representation_gap_threshold = float(
+        np.percentile(calibration_scores["representation_gap"], 75)
+    )
     model.class_thresholds = learn_class_thresholds(
         calibration_scores,
         entropy_percentile=entropy_percentile,
@@ -124,12 +141,13 @@ def fit_entropy_model(
 
     print(f"Fit KDE entropy model on {len(train_label_ids)} labeled images from {learning_dir}")
     print(f"Classes modeled: {len(model.class_ids)}")
-    print(f"Entropy threshold ({entropy_percentile}%): {model.entropy_threshold:.3f}")
-    print(f"Density threshold ({density_percentile}%): {model.density_threshold:.3f}")
+    print(f"Low entropy threshold ({entropy_percentile}%): {model.entropy_threshold:.3f}")
+    print(f"High KDE density threshold ({density_percentile}%): {model.density_threshold:.3f}")
     print(
         f"Complete outlier density threshold "
         f"({outlier_density_percentile}%): {model.outlier_density_threshold:.3f}"
     )
+    print(f"Representation gap threshold (75%): {model.representation_gap_threshold:.3f}")
     print(f"Class-specific thresholds learned: {len(model.class_thresholds)}")
 
     return model
@@ -165,19 +183,23 @@ def learn_class_thresholds(
             "outlier_density_threshold": float(
                 np.percentile(class_scores["best_log_density"], outlier_density_percentile)
             ),
+            "representation_gap_threshold": float(
+                np.percentile(class_scores["representation_gap"], 75)
+            ),
             "sample_count": int(len(class_scores)),
         }
 
     return thresholds
 
 
-def apply_class_thresholds(model, scores):
+def apply_class_thresholds(model, scores, X_scaled=None):
     label_column = threshold_label_column(scores)
     comparison_ids = scores[label_column].fillna(scores["predicted_label_id"]).astype(int)
 
     entropy_thresholds = []
     density_thresholds = []
     outlier_thresholds = []
+    representation_thresholds = []
 
     for label_id in comparison_ids:
         class_threshold = model.class_thresholds.get(int(label_id), {})
@@ -193,6 +215,12 @@ def apply_class_thresholds(model, scores):
                 model.outlier_density_threshold,
             )
         )
+        representation_thresholds.append(
+            class_threshold.get(
+                "representation_gap_threshold",
+                model.representation_gap_threshold,
+            )
+        )
 
     scores["threshold_label_id"] = comparison_ids
     if label_column == "actual_label_id" and "actual_label_name" in scores.columns:
@@ -202,12 +230,40 @@ def apply_class_thresholds(model, scores):
     scores["entropy_threshold"] = entropy_thresholds
     scores["density_threshold"] = density_thresholds
     scores["outlier_density_threshold"] = outlier_thresholds
-    scores["high_entropy"] = scores["entropy"] >= scores["entropy_threshold"]
-    scores["low_density"] = scores["best_log_density"] <= scores["density_threshold"]
+    scores["representation_gap_threshold"] = representation_thresholds
+
+    if X_scaled is not None:
+        representation_scores = []
+        for row_index, label_id in enumerate(comparison_ids):
+            class_embeddings = model.training_embeddings_by_class.get(int(label_id))
+            if class_embeddings is None or len(class_embeddings) == 0:
+                representation_scores.append(0.0)
+                continue
+
+            similarities = _rbf_kernel(
+                X_scaled[row_index:row_index + 1],
+                class_embeddings,
+                model.gamma,
+            ).ravel()
+            representation_scores.append(float(np.max(similarities)))
+
+        scores["representation_score"] = representation_scores
+        scores["representation_gap"] = 1.0 - scores["representation_score"]
+
+    scores["low_entropy"] = scores["entropy"] <= scores["entropy_threshold"]
+    scores["high_density"] = scores["best_log_density"] >= scores["density_threshold"]
     scores["complete_outlier"] = (
         scores["best_log_density"] <= scores["outlier_density_threshold"]
     )
-    scores["interesting"] = scores["high_entropy"] | scores["low_density"]
+    scores["in_distribution"] = ~scores["complete_outlier"]
+    scores["poorly_represented"] = (
+        scores["representation_gap"] >= scores["representation_gap_threshold"]
+    )
+    scores["interesting"] = (
+        scores["low_entropy"]
+        & scores["in_distribution"]
+        & scores["poorly_represented"]
+    )
     scores["herding_candidate"] = scores["interesting"] & ~scores["complete_outlier"]
     return scores
 
@@ -244,7 +300,7 @@ def score_embeddings(model, X, metadata):
     if "label_name" in metadata.columns:
         scores["actual_label_name"] = metadata["label_name"].values
 
-    return apply_class_thresholds(model, scores)
+    return apply_class_thresholds(model, scores, X_scaled=X_scaled)
 
 
 def score_directory(model, input_dir="saved_vectors/testing", save_csv=True):
@@ -429,7 +485,7 @@ def save_subset_visualizations(input_dir, scores, set_name="target_subset"):
     )
     plt.xlabel("Best KDE log density")
     plt.ylabel("Normalized entropy")
-    plt.title(f"{set_name}: Candidate Subset")
+    plt.title(f"{set_name}: Confident In-Distribution Poorly Represented Subset")
     plt.legend()
     plt.tight_layout()
     subset_entropy_plot = output_path / f"{set_name}_entropy_density_plot.png"
@@ -459,7 +515,7 @@ def save_subset_visualizations(input_dir, scores, set_name="target_subset"):
     )
     plt.xlabel("PCA 1")
     plt.ylabel("PCA 2")
-    plt.title(f"{set_name}: Candidate Subset in DINO Space")
+    plt.title(f"{set_name}: Poorly Represented Subset in DINO Space")
     plt.legend()
     plt.tight_layout()
     subset_pca_plot = output_path / f"{set_name}_pca_plot.png"
@@ -468,6 +524,122 @@ def save_subset_visualizations(input_dir, scores, set_name="target_subset"):
 
     print(f"Saved subset entropy/density plot -> {subset_entropy_plot}")
     print(f"Saved subset PCA plot -> {subset_pca_plot}")
+
+
+def save_class_subset_visualizations(input_dir, scores):
+    output_path = Path(input_dir)
+    if not output_path.is_absolute():
+        output_path = ut.PROJECT_ROOT / output_path
+
+    graph_root = output_path / "class_subset_graphs"
+    graph_root.mkdir(parents=True, exist_ok=True)
+
+    X, label_ids, _, _, metadata, _ = ut.load_DINO_vectors(input_dir)
+    X_scaled = StandardScaler().fit_transform(X)
+    points_2d = PCA(n_components=2, random_state=42).fit_transform(X_scaled)
+
+    subset_mask = scores["herding_candidate"].fillna(False).to_numpy(dtype=bool)
+    selected_mask = scores["herding_selected"].fillna(False).to_numpy(dtype=bool)
+    class_names = scores["threshold_label_name"].fillna("unknown")
+
+    saved_count = 0
+    for class_name in sorted(class_names[subset_mask].unique()):
+        all_class_mask = class_names == class_name
+        class_mask = subset_mask & (class_names == class_name)
+        class_selected_mask = selected_mask & (class_names == class_name)
+        if class_mask.sum() == 0:
+            continue
+
+        class_dir = graph_root / safe_folder_name(class_name)
+        class_dir.mkdir(parents=True, exist_ok=True)
+        class_scores = scores.loc[all_class_mask]
+        entropy_threshold = float(class_scores["entropy_threshold"].iloc[0])
+        representation_threshold = float(
+            class_scores["representation_gap_threshold"].iloc[0]
+        )
+
+        plt.figure(figsize=(8, 5))
+        plt.scatter(
+            scores.loc[all_class_mask, "representation_gap"],
+            scores.loc[all_class_mask, "entropy"],
+            s=24,
+            alpha=0.25,
+            label=f"all {class_name} target images",
+        )
+        plt.scatter(
+            scores.loc[class_mask, "representation_gap"],
+            scores.loc[class_mask, "entropy"],
+            s=42,
+            alpha=0.75,
+            label="poorly represented subset",
+        )
+        plt.scatter(
+            scores.loc[class_selected_mask, "representation_gap"],
+            scores.loc[class_selected_mask, "entropy"],
+            s=120,
+            facecolors="none",
+            edgecolors="black",
+            linewidths=1.7,
+            label="Kernel Herding selected",
+        )
+        plt.axhline(
+            entropy_threshold,
+            color="tab:green",
+            linestyle="--",
+            linewidth=1.2,
+            label=f"low entropy <= {entropy_threshold:.3f}",
+        )
+        plt.axvline(
+            representation_threshold,
+            color="tab:red",
+            linestyle="--",
+            linewidth=1.2,
+            label=f"high rep gap >= {representation_threshold:.3f}",
+        )
+        plt.xlabel("Representation gap")
+        plt.ylabel("Normalized entropy")
+        plt.title(f"{class_name}: Poorly Represented Candidate Subset")
+        plt.legend()
+        plt.tight_layout()
+        subset_metrics_plot = class_dir / "representation_gap_entropy.png"
+        plt.savefig(subset_metrics_plot, dpi=160)
+        plt.close()
+
+        plt.figure(figsize=(8, 5))
+        plt.scatter(
+            points_2d[all_class_mask, 0],
+            points_2d[all_class_mask, 1],
+            s=24,
+            alpha=0.25,
+            label=f"all {class_name} target images",
+        )
+        plt.scatter(
+            points_2d[class_mask, 0],
+            points_2d[class_mask, 1],
+            s=42,
+            alpha=0.75,
+            label="poorly represented subset",
+        )
+        plt.scatter(
+            points_2d[class_selected_mask, 0],
+            points_2d[class_selected_mask, 1],
+            s=120,
+            facecolors="none",
+            edgecolors="black",
+            linewidths=1.7,
+            label="Kernel Herding selected",
+        )
+        plt.xlabel("PCA 1")
+        plt.ylabel("PCA 2")
+        plt.title(f"{class_name}: Subset in DINO Embedding Space")
+        plt.legend()
+        plt.tight_layout()
+        subset_pca_plot = class_dir / "pca_subset.png"
+        plt.savefig(subset_pca_plot, dpi=160)
+        plt.close()
+        saved_count += 1
+
+    print(f"Saved class subset graph folders -> {graph_root} ({saved_count} classes)")
 
 
 def save_visualizations(input_dir, scores, set_name="target"):
@@ -566,8 +738,8 @@ def save_visualizations(input_dir, scores, set_name="target"):
 
 def print_interesting_summary(scores, top_n=10):
     interesting_scores = scores[scores["herding_candidate"]].sort_values(
-        ["entropy", "best_log_density"],
-        ascending=[False, True],
+        ["representation_gap", "entropy", "best_log_density"],
+        ascending=[False, True, False],
     )
 
     print(f"Interesting candidate subset: {len(interesting_scores)} of {len(scores)}")
@@ -576,7 +748,8 @@ def print_interesting_summary(scores, top_n=10):
             f"{row['path']} | predicted={row['predicted_label_name']} "
             f"| entropy={row['entropy']:.3f} "
             f"| probability={row['class_probability']:.3f} "
-            f"| log_density={row['best_log_density']:.1f}"
+            f"| log_density={row['best_log_density']:.1f} "
+            f"| representation_gap={row['representation_gap']:.3f}"
         )
 
 
@@ -603,6 +776,7 @@ def run_entropy_analysis(
     )
     save_visualizations(target_dir, target_scores, set_name="target")
     save_subset_visualizations(target_dir, target_scores, set_name="target_subset")
+    save_class_subset_visualizations(target_dir, target_scores)
     print_interesting_summary(target_scores, top_n=top_n)
     print(f"Kernel Herding selected {len(selected)} images")
     print(f"Kernel Herding candidates came only from {target_dir}")
