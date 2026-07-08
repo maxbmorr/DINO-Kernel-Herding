@@ -1,11 +1,11 @@
 __pycache__/
 *.pyc
+
 .numba_cache/
 .u2net/
-training_data_no_bg/
+
+coco/
 saved_vectors/
 training_data_no_bg/
-.u2net/
-__pycache__/
-*.pyc
-.numba_cache/
+
+*.zip
