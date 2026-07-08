@@ -1,0 +1,5 @@
+__pycache__/
+*.pyc
+.numba_cache/
+.u2net/
+training_data_no_bg/

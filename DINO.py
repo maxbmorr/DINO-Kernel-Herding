@@ -25,7 +25,7 @@ def setup():
     ])
     return device, transform, model
 
-def get_DINO_vector(dataset_path):
+def DINO_Vector(dataset_path):
     device, transform, model = setup()
     data = datasets.ImageFolder(dataset_path, transform = transform)
     loader = DataLoader(data, batch_size = 16, shuffle = False)
