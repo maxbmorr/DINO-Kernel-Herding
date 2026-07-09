@@ -26,6 +26,7 @@ class EntropyModel:
     representation_gap_threshold: float
     class_thresholds: dict
     gamma: float
+    von_neumann_neighbor_count: int
 
 
 def _filter_labeled_rows(X, label_ids, metadata):
@@ -49,6 +50,34 @@ def _normalized_entropy(probabilities):
     if class_count <= 1:
         return np.zeros_like(entropy)
     return np.maximum(entropy / np.log(class_count), 0.0)
+
+
+def _von_neumann_entropy_from_kernel(kernel_matrix):
+    density_matrix = kernel_matrix / (np.trace(kernel_matrix) + 1e-12)
+    eigenvalues = np.linalg.eigvalsh(density_matrix)
+    eigenvalues = np.clip(eigenvalues, 1e-12, 1.0)
+    entropy = -np.sum(eigenvalues * np.log(eigenvalues))
+    max_entropy = np.log(len(eigenvalues))
+    if max_entropy <= 0:
+        return 0.0
+    return float(entropy / max_entropy)
+
+
+def local_von_neumann_entropy(X_scaled, class_embeddings, gamma, neighbor_count=25):
+    if class_embeddings is None or len(class_embeddings) == 0:
+        return np.zeros(len(X_scaled))
+
+    entropies = []
+    for row in X_scaled:
+        row = row.reshape(1, -1)
+        similarities = _rbf_kernel(row, class_embeddings, gamma).ravel()
+        local_count = min(neighbor_count, len(class_embeddings))
+        neighbor_positions = np.argpartition(similarities, -local_count)[-local_count:]
+        local_points = np.vstack([class_embeddings[neighbor_positions], row])
+        local_kernel = _rbf_kernel(local_points, local_points, gamma)
+        entropies.append(_von_neumann_entropy_from_kernel(local_kernel))
+
+    return np.array(entropies)
 
 
 def fit_nce_density(X_class, noise_ratio=5, random_state=42):
@@ -101,7 +130,7 @@ def nce_log_density(nce_model, X):
 def fit_entropy_model(
     learning_dir="saved_vectors/learning",
     calibration_dir="saved_vectors/testing",
-    entropy_percentile=25,
+    entropy_percentile=75,
     density_percentile=75,
     outlier_density_percentile=1,
     min_class_samples=2,
@@ -160,6 +189,7 @@ def fit_entropy_model(
         representation_gap_threshold=0.0,
         class_thresholds={},
         gamma=1.0 / X_train_scaled.shape[1],
+        von_neumann_neighbor_count=25,
     )
 
     calibration_scores = score_directory(model, calibration_dir, save_csv=False)
@@ -185,7 +215,10 @@ def fit_entropy_model(
 
     print(f"Fit NCE entropy model on {len(train_label_ids)} labeled images from {learning_dir}")
     print(f"Classes modeled: {len(model.class_ids)}")
-    print(f"Low entropy threshold ({entropy_percentile}%): {model.entropy_threshold:.3f}")
+    print(
+        f"High von Neumann entropy threshold "
+        f"({entropy_percentile}%): {model.entropy_threshold:.3f}"
+    )
     print(f"High NCE density threshold ({density_percentile}%): {model.density_threshold:.3f}")
     print(
         f"Complete outlier density threshold "
@@ -205,7 +238,7 @@ def threshold_label_column(scores):
 
 def learn_class_thresholds(
     calibration_scores,
-    entropy_percentile=95,
+    entropy_percentile=75,
     density_percentile=5,
     outlier_density_percentile=1,
     min_samples=2,
@@ -248,7 +281,10 @@ def apply_class_thresholds(model, scores, X_scaled=None):
     for label_id in comparison_ids:
         class_threshold = model.class_thresholds.get(int(label_id), {})
         entropy_thresholds.append(
-            class_threshold.get("entropy_threshold", model.entropy_threshold)
+            max(
+                class_threshold.get("entropy_threshold", model.entropy_threshold),
+                model.entropy_threshold,
+            )
         )
         density_thresholds.append(
             class_threshold.get("density_threshold", model.density_threshold)
@@ -278,10 +314,12 @@ def apply_class_thresholds(model, scores, X_scaled=None):
 
     if X_scaled is not None:
         representation_scores = []
+        von_neumann_entropies = []
         for row_index, label_id in enumerate(comparison_ids):
             class_embeddings = model.training_embeddings_by_class.get(int(label_id))
             if class_embeddings is None or len(class_embeddings) == 0:
                 representation_scores.append(0.0)
+                von_neumann_entropies.append(0.0)
                 continue
 
             similarities = _rbf_kernel(
@@ -290,11 +328,20 @@ def apply_class_thresholds(model, scores, X_scaled=None):
                 model.gamma,
             ).ravel()
             representation_scores.append(float(np.max(similarities)))
+            von_neumann_entropies.append(
+                local_von_neumann_entropy(
+                    X_scaled[row_index:row_index + 1],
+                    class_embeddings,
+                    model.gamma,
+                    neighbor_count=model.von_neumann_neighbor_count,
+                )[0]
+            )
 
         scores["representation_score"] = representation_scores
         scores["representation_gap"] = 1.0 - scores["representation_score"]
+        scores["entropy"] = von_neumann_entropies
 
-    scores["low_entropy"] = scores["entropy"] <= scores["entropy_threshold"]
+    scores["high_entropy"] = scores["entropy"] >= scores["entropy_threshold"]
     scores["high_density"] = scores["best_log_density"] >= scores["density_threshold"]
     scores["complete_outlier"] = (
         scores["best_log_density"] <= scores["outlier_density_threshold"]
@@ -304,7 +351,7 @@ def apply_class_thresholds(model, scores, X_scaled=None):
         scores["representation_gap"] >= scores["representation_gap_threshold"]
     )
     scores["interesting"] = (
-        scores["low_entropy"]
+        scores["high_entropy"]
         & scores["in_distribution"]
         & scores["poorly_represented"]
     )
@@ -323,7 +370,7 @@ def score_embeddings(model, X, metadata):
     log_scores = log_densities + log_priors
     probabilities = np.exp(log_scores - _logsumexp(log_scores, axis=1))
 
-    entropy = _normalized_entropy(probabilities)
+    class_entropy = _normalized_entropy(probabilities)
     best_class_positions = np.argmax(probabilities, axis=1)
     best_label_ids = model.class_ids[best_class_positions]
     best_label_names = [model.class_names[position] for position in best_class_positions]
@@ -335,7 +382,7 @@ def score_embeddings(model, X, metadata):
         "predicted_label_id": best_label_ids,
         "predicted_label_name": best_label_names,
         "class_probability": best_probabilities,
-        "entropy": entropy,
+        "class_entropy": class_entropy,
         "best_log_density": best_log_densities,
     })
 
@@ -348,7 +395,7 @@ def score_embeddings(model, X, metadata):
 
 
 def score_directory(model, input_dir="saved_vectors/testing", save_csv=True):
-    X, label_ids, _, _, metadata, _ = ut.load_DINO_vectors(input_dir)
+    X, _, _, _, metadata, _ = ut.load_DINO_vectors(input_dir)
     scores = score_embeddings(model, X, metadata)
 
     if save_csv:
@@ -538,8 +585,8 @@ def save_subset_visualizations(input_dir, scores, set_name="target_subset"):
         label="Kernel Herding selected",
     )
     plt.xlabel("Best NCE log density")
-    plt.ylabel("Normalized entropy")
-    plt.title(f"{set_name}: Confident In-Distribution Poorly Represented Subset")
+    plt.ylabel("Normalized von Neumann entropy")
+    plt.title(f"{set_name}: High-Entropy In-Distribution Poorly Represented Subset")
     plt.legend()
     plt.tight_layout()
     subset_entropy_plot = output_path / f"{set_name}_entropy_density_plot.png"
@@ -641,7 +688,7 @@ def save_class_subset_visualizations(input_dir, scores):
             color="tab:green",
             linestyle="--",
             linewidth=1.2,
-            label=f"low entropy <= {entropy_threshold:.3f}",
+            label=f"high vN entropy >= {entropy_threshold:.3f}",
         )
         plt.axvline(
             representation_threshold,
@@ -651,8 +698,8 @@ def save_class_subset_visualizations(input_dir, scores):
             label=f"high rep gap >= {representation_threshold:.3f}",
         )
         plt.xlabel("Representation gap")
-        plt.ylabel("Normalized entropy")
-        plt.title(f"{class_name}: Poorly Represented Candidate Subset")
+        plt.ylabel("Normalized von Neumann entropy")
+        plt.title(f"{class_name}: High-Entropy Poorly Represented Candidate Subset")
         plt.legend()
         plt.tight_layout()
         subset_metrics_plot = class_dir / "representation_gap_entropy.png"
@@ -741,8 +788,8 @@ def save_visualizations(input_dir, scores, set_name="target"):
         label="Kernel Herding selected",
     )
     plt.xlabel("Best NCE log density")
-    plt.ylabel("Normalized entropy")
-    plt.title(f"{set_name}: NCE Entropy vs Density")
+    plt.ylabel("Normalized von Neumann entropy")
+    plt.title(f"{set_name}: vN Entropy vs NCE Density")
     plt.legend()
     plt.tight_layout()
     entropy_plot = output_path / f"{set_name}_entropy_density_plot.png"
@@ -792,15 +839,16 @@ def save_visualizations(input_dir, scores, set_name="target"):
 
 def print_interesting_summary(scores, top_n=10):
     interesting_scores = scores[scores["herding_candidate"]].sort_values(
-        ["representation_gap", "entropy", "best_log_density"],
-        ascending=[False, True, False],
+        ["entropy", "representation_gap", "best_log_density"],
+        ascending=[False, False, False],
     )
 
     print(f"Interesting candidate subset: {len(interesting_scores)} of {len(scores)}")
     for _, row in interesting_scores.head(top_n).iterrows():
         print(
             f"{row['path']} | predicted={row['predicted_label_name']} "
-            f"| entropy={row['entropy']:.3f} "
+            f"| vN_entropy={row['entropy']:.3f} "
+            f"| class_entropy={row['class_entropy']:.3f} "
             f"| probability={row['class_probability']:.3f} "
             f"| log_density={row['best_log_density']:.1f} "
             f"| representation_gap={row['representation_gap']:.3f}"

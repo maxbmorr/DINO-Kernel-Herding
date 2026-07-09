@@ -18,11 +18,11 @@ Kernel Herding is controlled from `main.py`:
 
 ```python
 HERDING_SELECTION_COUNT = 4
-HERDING_CANDIDATE_POOL = "all"
+HERDING_CANDIDATE_POOL = "candidate"
 HERDING_PER_CLASS = True
 ```
 
-`HERDING_SELECTION_COUNT` is K, the number of herding points to select. With `HERDING_CANDIDATE_POOL = "all"`, Kernel Herding may select any image in the target vector folder. Other options are `"interesting"` and `"candidate"` if you want to restrict selection later. `HERDING_PER_CLASS = True` means K applies separately inside each class; setting it to `False` makes K the total number of selected images.
+`HERDING_SELECTION_COUNT` is K, the number of herding points to select. With `HERDING_CANDIDATE_POOL = "candidate"`, Kernel Herding selects from the high-von-Neumann-entropy, in-distribution, poorly represented candidate subset. Setting it to `"all"` lets Kernel Herding choose from every target image instead. `HERDING_PER_CLASS = True` means K applies separately inside each class; setting it to `False` makes K the total number of selected images.
 
 The old threshold-similarity classifier and the separate raw-image COCO detector have been removed from the runnable code.
 
@@ -173,7 +173,7 @@ saved_vectors/testing/
 
 It marks an image as a candidate only when all of these are true:
 
-- entropy is low, meaning the model is confident about that class
+- von Neumann entropy is high, meaning the image adds diversity in local DINO/kernel space
 - the image is in-distribution, meaning it is not a complete density outlier
 - representation gap is high, meaning it is not close to the learned examples already in that class
 
@@ -183,7 +183,7 @@ Second, it creates an `interesting_subset.csv` file from only the target/test/un
 
 Thresholds are learned separately for each class. For labeled test data, the code uses the actual class label. For unlabeled data, it uses the predicted class. This means an interesting zoomed-out cow affects the cow subset, but it does not change the pig subset.
 
-Third, it applies Kernel Herding to the selected target pool. With the current `main.py` settings, Kernel Herding may select from all target images and chooses K images separately per class. If `HERDING_CANDIDATE_POOL` is set to `"candidate"`, it selects only from the confident, in-distribution, poorly represented subset.
+Third, it applies Kernel Herding to the selected target pool. With the current `main.py` settings, Kernel Herding selects only from the high-von-Neumann-entropy, in-distribution, poorly represented subset and chooses K images separately per class.
 
 Running `main.py` with `RUN_ENTROPY_CALCULATOR = True` writes:
 
@@ -206,14 +206,15 @@ Important columns:
 
 - `predicted_label_name`: most likely class from the NCE probabilities
 - `class_probability`: probability of that class
-- `entropy`: uncertainty across classes
+- `class_entropy`: uncertainty across NCE class probabilities
+- `entropy`: local normalized von Neumann entropy in DINO/kernel space
 - `best_log_density`: how strongly the image fits its best class NCE density model
-- `low_entropy`: `True` when the image is confidently assigned to its threshold class
+- `high_entropy`: `True` when the image has high von Neumann entropy for its threshold class
 - `in_distribution`: `True` when the image is not a complete density outlier
 - `representation_score`: similarity to the closest learned example in that class
 - `representation_gap`: `1 - representation_score`; higher means less represented by learned examples
 - `poorly_represented`: `True` when representation gap is high for that class
-- `interesting`: `True` when the image is confident, in-distribution, and poorly represented
+- `interesting`: `True` when the image has high von Neumann entropy, is in-distribution, and is poorly represented
 - `complete_outlier`: `True` when the image is too far outside the learned density
 - `herding_candidate`: `True` when the image is in the small candidate subset
 - `herding_selected`: `True` when Kernel Herding selected the image
@@ -225,16 +226,16 @@ Important columns:
 
 The graph files show:
 
-- `learning_entropy_density_plot.png`: entropy vs NCE density for the learned/labeled reference set
+- `learning_entropy_density_plot.png`: von Neumann entropy vs NCE density for the learned/labeled reference set
 - `learning_pca_plot.png`: a 2D PCA view of the learned/labeled reference embeddings
-- `target_entropy_density_plot.png`: entropy vs NCE density for test or unlabeled candidates, with Kernel Herding selections circled
+- `target_entropy_density_plot.png`: von Neumann entropy vs NCE density for test or unlabeled candidates, with Kernel Herding selections circled
 - `target_pca_plot.png`: a 2D PCA view of the target candidates, with Kernel Herding selections circled
 - `target_subset_entropy_density_plot.png`: only the small candidate subset, with Kernel Herding selections circled
 - `target_subset_pca_plot.png`: only the small candidate subset in 2D PCA space, with Kernel Herding selections circled
 - `class_subset_graphs/<class name>/representation_gap_entropy.png`: one class-specific subset graph per class
 - `class_subset_graphs/<class name>/pca_subset.png`: one class-specific PCA subset graph per class
 
-In each class folder, `representation_gap_entropy.png` shows all target images for that class in the background, the candidate subset on top, and Kernel Herding selections circled. The dashed horizontal line is the class-specific low-entropy cutoff. The dashed vertical line is the class-specific high-representation-gap cutoff. Candidate points are the class points that fall below the entropy cutoff and to the right of the representation-gap cutoff, while also not being complete density outliers.
+In each class folder, `representation_gap_entropy.png` shows all target images for that class in the background, the candidate subset on top, and Kernel Herding selections circled. The dashed horizontal line is the class-specific high-von-Neumann-entropy cutoff. The dashed vertical line is the class-specific high-representation-gap cutoff. Candidate points are the class points that fall above the entropy cutoff and to the right of the representation-gap cutoff, while also not being complete density outliers.
 
 Running `main.py` creates:
 
