@@ -1,15 +1,18 @@
 import __utils__ as ut
 import embedding_classifier as ec
-import entropy_calculator as ent
+import optimization as opt
+import subset_probability as sp
 
 CREATE_DINO_DATASET = False
 SPLIT_DINO_DATASET = True
 RUN_EMBEDDING_CLASSIFIER = True
-RUN_ENTROPY_CALCULATOR = True
+RUN_SUBSET_PROBABILITY = True
+RUN_OPTIMIZATION = True
 
-HERDING_SELECTION_COUNT = 4
-HERDING_CANDIDATE_POOL = "all"  # "all", "interesting", or "candidate"
-HERDING_PER_CLASS = True
+OPTIMIZATION_SELECTION_COUNT = 4
+OPTIMIZATION_PROBABILITY_LAMBDA = 0
+OPTIMIZATION_KERNEL = "cosine"  # "cosine" or "rbf"
+OPTIMIZATION_STOP_WHEN_OBJECTIVE_DECREASES = True
 
 if CREATE_DINO_DATASET:
     X, Y, paths, classes = ut.create_dataset(
@@ -32,13 +35,18 @@ if RUN_EMBEDDING_CLASSIFIER:
         testing_dir="saved_vectors/testing",
     )
 
-if RUN_ENTROPY_CALCULATOR:
-    ent.run_entropy_analysis(
+if RUN_SUBSET_PROBABILITY:
+    sp.score_directory(
         learning_dir="saved_vectors/learning",
-        calibration_dir="saved_vectors/testing",
         target_dir="saved_vectors/testing",
-        herding_count=HERDING_SELECTION_COUNT,
-        herding_candidate_pool=HERDING_CANDIDATE_POOL,
-        herding_per_class=HERDING_PER_CLASS,
-        top_n=10,
+    )
+
+if RUN_OPTIMIZATION:
+    opt.optimize_subset_selection(
+        learning_dir="saved_vectors/learning",
+        target_dir="saved_vectors/testing",
+        selection_count=OPTIMIZATION_SELECTION_COUNT,
+        probability_lambda=OPTIMIZATION_PROBABILITY_LAMBDA,
+        kernel=OPTIMIZATION_KERNEL,
+        stop_when_objective_decreases=OPTIMIZATION_STOP_WHEN_OBJECTIVE_DECREASES,
     )

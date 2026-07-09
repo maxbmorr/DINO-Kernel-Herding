@@ -12,19 +12,8 @@ The DINO vector pipeline is still available, but it is behind flags in `main.py`
 - `CREATE_DINO_DATASET`: creates DINO feature vectors from COCO or class-folder images.
 - `SPLIT_DINO_DATASET`: splits saved DINO vectors into learning/testing folders.
 - `RUN_EMBEDDING_CLASSIFIER`: trains and tests a classifier using labeled DINO vectors.
-- `RUN_ENTROPY_CALCULATOR`: fits NCE density models on labeled DINO vectors, then uses Kernel Herding to select a useful subset of images.
-
-Kernel Herding is controlled from `main.py`:
-
-```python
-HERDING_SELECTION_COUNT = 4
-HERDING_CANDIDATE_POOL = "candidate"
-HERDING_PER_CLASS = True
-```
-
-`HERDING_SELECTION_COUNT` is K, the number of herding points to select. With `HERDING_CANDIDATE_POOL = "candidate"`, Kernel Herding selects from the high-von-Neumann-entropy, in-distribution, poorly represented candidate subset. Setting it to `"all"` lets Kernel Herding choose from every target image instead. `HERDING_PER_CLASS = True` means K applies separately inside each class; setting it to `False` makes K the total number of selected images.
-
-The old threshold-similarity classifier and the separate raw-image COCO detector have been removed from the runnable code.
+- `RUN_SUBSET_PROBABILITY`: estimates positive-membership probability for each target image against each learned class/subset using NCE.
+- `RUN_OPTIMIZATION`: selects target images using a von Neumann entropy objective with a log-probability term.
 
 ## Dependencies
 
@@ -44,7 +33,7 @@ Main dependencies:
 - `numpy`: saves DINO vectors as `.npy` files.
 - `pandas`: saves metadata and class mappings as `.csv` files.
 - `scikit-learn`: trains and evaluates the labeled DINO-embedding classifier.
-- `matplotlib`: creates graph visualizations for entropy, density, and Kernel Herding.
+- `matplotlib`: creates distribution graphs from probability and optimization CSV files.
 
 `rembg` also installs several supporting packages, including `pymatting`, `scipy`, `scikit-image`, `numba`, `pooch`, and `tqdm`.
 
@@ -153,89 +142,148 @@ metadata.csv
 class_mapping.csv
 ```
 
-## Entropy / NCE / Kernel Herding Data Finder
+## Subset Probability
 
-The entropy calculator is in `entropy_calculator.py`.
+The subset probability code is in `subset_probability.py`.
 
-It uses DINO embeddings, not raw pixels. It has two stages.
+It estimates \(\hat P_+(x)\), the probability that a target image is a positive example for each learned class/subset, using NCE:
 
-First, it fits one noise contrastive estimation model per labeled class using:
+- NCE: trains one binary noise-contrastive model per class using real class embeddings versus Gaussian noise.
+
+Both models use DINO embeddings from:
 
 ```text
 saved_vectors/learning/
 ```
 
-Then it learns thresholds from data the classifier did not train on:
+Then the target images from:
 
 ```text
 saved_vectors/testing/
 ```
 
-It marks an image as a candidate only when all of these are true:
-
-- von Neumann entropy is high, meaning the image adds diversity in local DINO/kernel space
-- the image is in-distribution, meaning it is not a complete density outlier
-- representation gap is high, meaning it is not close to the learned examples already in that class
-
-The NCE estimator uses Gaussian noise built from the mean and covariance of the learned embeddings for each class. It still marks `complete_outlier` for images with extremely low NCE density. Those are shown in the scores and graphs, but they are not part of the candidate subset.
-
-Second, it creates an `interesting_subset.csv` file from only the target/test/unlabeled images that are interesting but not complete outliers. This is the small side-group of the data you care about.
-
-Thresholds are learned separately for each class. For labeled test data, the code uses the actual class label. For unlabeled data, it uses the predicted class. This means an interesting zoomed-out cow affects the cow subset, but it does not change the pig subset.
-
-Third, it applies Kernel Herding to the selected target pool. With the current `main.py` settings, Kernel Herding selects only from the high-von-Neumann-entropy, in-distribution, poorly represented subset and chooses K images separately per class.
-
-Running `main.py` with `RUN_ENTROPY_CALCULATOR = True` writes:
+are scored against every learned class/subset. The probability used by optimization is:
 
 ```text
-saved_vectors/learning/entropy_scores.csv
-saved_vectors/learning/learning_entropy_density_plot.png
-saved_vectors/learning/learning_pca_plot.png
-saved_vectors/testing/entropy_scores.csv
-saved_vectors/testing/interesting_subset.csv
-saved_vectors/testing/herding_selection.csv
-saved_vectors/testing/class_subset_summary.csv
-saved_vectors/testing/target_entropy_density_plot.png
-saved_vectors/testing/target_pca_plot.png
-saved_vectors/testing/target_subset_entropy_density_plot.png
-saved_vectors/testing/target_subset_pca_plot.png
-saved_vectors/testing/class_subset_graphs/
+P_hat_+(x) = P_NCE(real subset example | x)
 ```
 
-Important columns:
+The result is not normalized across classes. Each class/subset gets its own
+positive probability for the image.
 
-- `predicted_label_name`: most likely class from the NCE probabilities
-- `class_probability`: probability of that class
-- `class_entropy`: uncertainty across NCE class probabilities
-- `entropy`: local normalized von Neumann entropy in DINO/kernel space
-- `best_log_density`: how strongly the image fits its best class NCE density model
-- `high_entropy`: `True` when the image has high von Neumann entropy for its threshold class
-- `in_distribution`: `True` when the image is not a complete density outlier
-- `representation_score`: similarity to the closest learned example in that class
-- `representation_gap`: `1 - representation_score`; higher means less represented by learned examples
-- `poorly_represented`: `True` when representation gap is high for that class
-- `interesting`: `True` when the image has high von Neumann entropy, is in-distribution, and is poorly represented
-- `complete_outlier`: `True` when the image is too far outside the learned density
-- `herding_candidate`: `True` when the image is in the small candidate subset
-- `herding_selected`: `True` when Kernel Herding selected the image
-- `herding_rank`: selection order from Kernel Herding
-- `threshold_label_id`: class id used for the class-specific threshold
-- `threshold_label_name`: class name used for the class-specific threshold
+Running `main.py` with `RUN_SUBSET_PROBABILITY = True` writes:
 
-`interesting_subset.csv` contains the small target-only candidate subset. `herding_selection.csv` contains the final smaller Kernel Herding subset, ordered by `herding_rank`. `class_subset_summary.csv` shows how many target images, interesting candidates, and selected images each class-specific subset has. Kernel Herding only selects from the target set, normally `saved_vectors/testing/` or another unlabeled vector folder. It does not select from the learning set.
+```text
+saved_vectors/testing/subset_probability_scores.csv
+saved_vectors/testing/subset_probability_matrix.csv
+```
 
-The graph files show:
+Important columns in `subset_probability_scores.csv`:
 
-- `learning_entropy_density_plot.png`: von Neumann entropy vs NCE density for the learned/labeled reference set
-- `learning_pca_plot.png`: a 2D PCA view of the learned/labeled reference embeddings
-- `target_entropy_density_plot.png`: von Neumann entropy vs NCE density for test or unlabeled candidates, with Kernel Herding selections circled
-- `target_pca_plot.png`: a 2D PCA view of the target candidates, with Kernel Herding selections circled
-- `target_subset_entropy_density_plot.png`: only the small candidate subset, with Kernel Herding selections circled
-- `target_subset_pca_plot.png`: only the small candidate subset in 2D PCA space, with Kernel Herding selections circled
-- `class_subset_graphs/<class name>/representation_gap_entropy.png`: one class-specific subset graph per class
-- `class_subset_graphs/<class name>/pca_subset.png`: one class-specific PCA subset graph per class
+- `path`: image path
+- `predicted_subset_label_id`: class/subset with the highest averaged probability
+- `predicted_subset_label_name`: name of that class/subset
+- `positive_probability`: \(\hat P_+(x)\) for the selected subset
+- `subset_probability`: compatibility alias for `positive_probability`
+- `probability_method`: currently `nce`
+- `nce_positive_probability`: NCE \(\hat P_+(x)\) for the selected subset
+- `nce_log_density`: NCE log-density score for the selected subset
+- `actual_label_id`: known label, if the target folder has labels
+- `actual_label_name`: known label name, if the target folder has labels
 
-In each class folder, `representation_gap_entropy.png` shows all target images for that class in the background, the candidate subset on top, and Kernel Herding selections circled. The dashed horizontal line is the class-specific high-von-Neumann-entropy cutoff. The dashed vertical line is the class-specific high-representation-gap cutoff. Candidate points are the class points that fall above the entropy cutoff and to the right of the representation-gap cutoff, while also not being complete density outliers.
+`subset_probability_matrix.csv` stores one `*_positive_probability` column per learned class/subset.
+
+This does not draw boxes or detect multiple objects. It answers: given this image's DINO embedding, how positive/subset-like is it for each learned subset?
+
+## Von Neumann Optimization
+
+The optimization code is in `optimization.py`.
+
+It uses:
+
+```text
+saved_vectors/learning/
+saved_vectors/testing/subset_probability_scores.csv
+saved_vectors/testing/subset_probability_matrix.csv
+```
+
+For each learned subset/class, it:
+
+- takes the labeled DINO embeddings from that subset as the reference set
+- considers every target/testing image for that subset
+- greedily selects images that maximize normalized von Neumann entropy of the kernel matrix plus a log-probability term
+
+In plain terms, it asks:
+
+```text
+For this subset, which target image best increases kernel-space diversity
+after the objective also charges the image by log P_hat_+(x)?
+```
+
+The objective is:
+
+```text
+H(labeled subset c + selected target images)
++ lambda * sum(log(P_hat_+(x)))
+```
+
+There is no hard rule that a target image must first be predicted as subset `c`.
+Every target image can be considered for every subset. The subset membership
+pressure enters through the `lambda * log(P_hat_+(x))` term.
+
+The main controls are in `main.py`:
+
+```python
+OPTIMIZATION_SELECTION_COUNT = 4
+OPTIMIZATION_PROBABILITY_LAMBDA = 0.1
+OPTIMIZATION_KERNEL = "cosine"
+OPTIMIZATION_STOP_WHEN_OBJECTIVE_DECREASES = True
+```
+
+Running `main.py` with `RUN_OPTIMIZATION = True` writes:
+
+```text
+saved_vectors/testing/optimization_selection.csv
+saved_vectors/testing/optimization_summary.csv
+```
+
+Important columns in `optimization_selection.csv`:
+
+- `subset_label_name`: subset/class being optimized
+- `path`: selected target image
+- `optimization_rank`: greedy selection order inside that subset
+- `kernel`: kernel used for the von Neumann entropy calculation
+- `stop_when_objective_decreases`: whether selection stops when no remaining image improves the objective
+- `objective`: value of `H + lambda * sum(log(P_hat_+(x)))` after this image is selected
+- `objective_gain`: change in the objective from selecting this image
+- `probability_lambda`: scalar lambda used in the log-probability term
+- `base_von_neumann_entropy`: entropy before adding selected target images
+- `von_neumann_entropy`: entropy after this selected image is added
+- `von_neumann_entropy_gain`: improvement from adding this image
+- `log_probability`: `log(positive_probability)` for the selected image
+- `log_probability_sum`: cumulative log-probability sum for the selected subset
+- `positive_probability`: \(\hat P_+(x)\) for the optimized subset
+- `subset_probability`: compatibility alias for `positive_probability`
+- `best_predicted_subset_label_name`: subset with the highest probability for this image
+- `best_predicted_subset_probability`: probability of that best predicted subset
+
+## Distribution Graphs
+
+Distribution graphs are created by `graph_distributions.py`.
+
+Run:
+
+```powershell
+python graph_distributions.py
+```
+
+The graphs are saved in:
+
+```text
+distribution_graphs/
+```
+
+The current graphs show NCE positive-membership probability distributions, predicted subset counts, optimization selection counts, objective gains, entropy gains, and probability vs entropy gain for selected images.
 
 Running `main.py` creates:
 
@@ -247,3 +295,7 @@ saved_vectors/
   metadata.csv
   class_mapping.csv
 ```
+
+## License
+
+This project is licensed under the MIT License. See `LICENSE`.
