@@ -1,13 +1,15 @@
 import __utils__ as ut
-import coco_classifier as cc
 import embedding_classifier as ec
 import entropy_calculator as ent
 
 CREATE_DINO_DATASET = False
-SPLIT_DINO_DATASET = False
+SPLIT_DINO_DATASET = True
 RUN_EMBEDDING_CLASSIFIER = True
 RUN_ENTROPY_CALCULATOR = True
-RUN_COCO_CLASSIFIER = False
+
+HERDING_SELECTION_COUNT = 4
+HERDING_CANDIDATE_POOL = "all"  # "all", "interesting", or "candidate"
+HERDING_PER_CLASS = True
 
 if CREATE_DINO_DATASET:
     X, Y, paths, classes = ut.create_dataset(
@@ -35,13 +37,8 @@ if RUN_ENTROPY_CALCULATOR:
         learning_dir="saved_vectors/learning",
         calibration_dir="saved_vectors/testing",
         target_dir="saved_vectors/testing",
-        herding_count=3,
+        herding_count=HERDING_SELECTION_COUNT,
+        herding_candidate_pool=HERDING_CANDIDATE_POOL,
+        herding_per_class=HERDING_PER_CLASS,
         top_n=10,
-    )
-
-if RUN_COCO_CLASSIFIER:
-    cc.demo(
-        image_path="coco/val2017/000000000139.jpg",
-        score_threshold=0.5,
-        max_detections=10,
     )

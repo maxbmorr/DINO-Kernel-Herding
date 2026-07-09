@@ -5,19 +5,26 @@ For CNiEL research 2026 for the Dr. Austin Brockmeier.  This is my primary proje
 
 The current pipeline starts in `main.py`.
 
-The default learning classifier is now a DINO-embedding classifier in `embedding_classifier.py`. It learns only from labeled images, using the labels saved in `saved_vectors/learning/labels.npy`, then tests on `saved_vectors/testing/labels.npy`.
-
-A separate COCO-pretrained Faster R-CNN detector is also available in `coco_classifier.py`. That detector does not learn from your dataset; it is already pretrained on COCO and runs directly on images.
+The active learning classifier is a DINO-embedding classifier in `embedding_classifier.py`. It learns only from labeled images, using the labels saved in `saved_vectors/learning/labels.npy`, then tests on `saved_vectors/testing/labels.npy`.
 
 The DINO vector pipeline is still available, but it is behind flags in `main.py`:
 
 - `CREATE_DINO_DATASET`: creates DINO feature vectors from COCO or class-folder images.
 - `SPLIT_DINO_DATASET`: splits saved DINO vectors into learning/testing folders.
 - `RUN_EMBEDDING_CLASSIFIER`: trains and tests a classifier using labeled DINO vectors.
-- `RUN_ENTROPY_CALCULATOR`: fits KDE models on labeled DINO vectors, then uses Kernel Herding to select a useful subset of interesting images.
-- `RUN_COCO_CLASSIFIER`: runs the COCO-pretrained object detector.
+- `RUN_ENTROPY_CALCULATOR`: fits NCE density models on labeled DINO vectors, then uses Kernel Herding to select a useful subset of images.
 
-The old threshold-similarity classifier has been removed from the runnable code.
+Kernel Herding is controlled from `main.py`:
+
+```python
+HERDING_SELECTION_COUNT = 4
+HERDING_CANDIDATE_POOL = "all"
+HERDING_PER_CLASS = True
+```
+
+`HERDING_SELECTION_COUNT` is K, the number of herding points to select. With `HERDING_CANDIDATE_POOL = "all"`, Kernel Herding may select any image in the target vector folder. Other options are `"interesting"` and `"candidate"` if you want to restrict selection later. `HERDING_PER_CLASS = True` means K applies separately inside each class; setting it to `False` makes K the total number of selected images.
+
+The old threshold-similarity classifier and the separate raw-image COCO detector have been removed from the runnable code.
 
 ## Dependencies
 
@@ -29,8 +36,8 @@ python -m pip install torch torchvision pillow rembg onnxruntime numpy pandas sc
 
 Main dependencies:
 
-- `torch`: runs the DINOv2 model, Faster R-CNN detector, and tensor operations.
-- `torchvision`: loads image folders, applies image transforms, and provides the COCO-pretrained Faster R-CNN detector.
+- `torch`: runs the DINOv2 model and tensor operations.
+- `torchvision`: loads image folders and applies image transforms.
 - `pillow`: opens and converts image files.
 - `rembg`: removes image backgrounds.
 - `onnxruntime`: runs the background-removal model used by `rembg`.
@@ -46,7 +53,6 @@ Main dependencies:
 The first time the project runs, it may download model files:
 
 - DINOv2 through `torch.hub.load("facebookresearch/dinov2", "dinov2_vits14")`
-- Faster R-CNN through `torchvision.models.detection.fasterrcnn_resnet50_fpn_v2(weights="DEFAULT")`
 - `u2net.onnx` for background removal through `rembg`
 
 The code stores the `rembg` model in the local `.u2net/` folder and Numba cache files in `.numba_cache/`.
@@ -147,13 +153,13 @@ metadata.csv
 class_mapping.csv
 ```
 
-## Entropy / KDE / Kernel Herding Data Finder
+## Entropy / NCE / Kernel Herding Data Finder
 
 The entropy calculator is in `entropy_calculator.py`.
 
 It uses DINO embeddings, not raw pixels. It has two stages.
 
-First, it fits one kernel density estimation model per labeled class using:
+First, it fits one noise contrastive estimation model per labeled class using:
 
 ```text
 saved_vectors/learning/
@@ -168,16 +174,16 @@ saved_vectors/testing/
 It marks an image as a candidate only when all of these are true:
 
 - entropy is low, meaning the model is confident about that class
-- the image is in-distribution, meaning it is not a complete KDE outlier
+- the image is in-distribution, meaning it is not a complete density outlier
 - representation gap is high, meaning it is not close to the learned examples already in that class
 
-It still marks `complete_outlier` for images with extremely low density. Those are shown in the scores and graphs, but they are not part of the candidate subset.
+The NCE estimator uses Gaussian noise built from the mean and covariance of the learned embeddings for each class. It still marks `complete_outlier` for images with extremely low NCE density. Those are shown in the scores and graphs, but they are not part of the candidate subset.
 
 Second, it creates an `interesting_subset.csv` file from only the target/test/unlabeled images that are interesting but not complete outliers. This is the small side-group of the data you care about.
 
 Thresholds are learned separately for each class. For labeled test data, the code uses the actual class label. For unlabeled data, it uses the predicted class. This means an interesting zoomed-out cow affects the cow subset, but it does not change the pig subset.
 
-Third, it applies Kernel Herding separately inside each class-specific candidate subset. This chooses a few representative examples per class-specific poorly represented subset.
+Third, it applies Kernel Herding to the selected target pool. With the current `main.py` settings, Kernel Herding may select from all target images and chooses K images separately per class. If `HERDING_CANDIDATE_POOL` is set to `"candidate"`, it selects only from the confident, in-distribution, poorly represented subset.
 
 Running `main.py` with `RUN_ENTROPY_CALCULATOR = True` writes:
 
@@ -198,12 +204,12 @@ saved_vectors/testing/class_subset_graphs/
 
 Important columns:
 
-- `predicted_label_name`: most likely class from the KDE probabilities
+- `predicted_label_name`: most likely class from the NCE probabilities
 - `class_probability`: probability of that class
 - `entropy`: uncertainty across classes
-- `best_log_density`: how strongly the image fits its best class KDE
+- `best_log_density`: how strongly the image fits its best class NCE density model
 - `low_entropy`: `True` when the image is confidently assigned to its threshold class
-- `in_distribution`: `True` when the image is not a complete KDE outlier
+- `in_distribution`: `True` when the image is not a complete density outlier
 - `representation_score`: similarity to the closest learned example in that class
 - `representation_gap`: `1 - representation_score`; higher means less represented by learned examples
 - `poorly_represented`: `True` when representation gap is high for that class
@@ -219,51 +225,16 @@ Important columns:
 
 The graph files show:
 
-- `learning_entropy_density_plot.png`: entropy vs KDE density for the learned/labeled reference set
+- `learning_entropy_density_plot.png`: entropy vs NCE density for the learned/labeled reference set
 - `learning_pca_plot.png`: a 2D PCA view of the learned/labeled reference embeddings
-- `target_entropy_density_plot.png`: entropy vs KDE density for test or unlabeled candidates, with Kernel Herding selections circled
+- `target_entropy_density_plot.png`: entropy vs NCE density for test or unlabeled candidates, with Kernel Herding selections circled
 - `target_pca_plot.png`: a 2D PCA view of the target candidates, with Kernel Herding selections circled
 - `target_subset_entropy_density_plot.png`: only the small candidate subset, with Kernel Herding selections circled
 - `target_subset_pca_plot.png`: only the small candidate subset in 2D PCA space, with Kernel Herding selections circled
 - `class_subset_graphs/<class name>/representation_gap_entropy.png`: one class-specific subset graph per class
 - `class_subset_graphs/<class name>/pca_subset.png`: one class-specific PCA subset graph per class
 
-In each class folder, `representation_gap_entropy.png` shows all target images for that class in the background, the candidate subset on top, and Kernel Herding selections circled. The dashed horizontal line is the class-specific low-entropy cutoff. The dashed vertical line is the class-specific high-representation-gap cutoff. Candidate points are the class points that fall below the entropy cutoff and to the right of the representation-gap cutoff, while also not being complete KDE outliers.
-
-## COCO Classifier
-
-The current classifier is in `coco_classifier.py`.
-
-It uses:
-
-```python
-from torchvision.models.detection import fasterrcnn_resnet50_fpn_v2
-```
-
-The model is pretrained on COCO and returns object detections:
-
-- `label_id`
-- `label_name`
-- `score`
-- `box`
-
-Run the demo with:
-
-```powershell
-python main.py
-```
-
-Or classify one image directly:
-
-```python
-import coco_classifier as cc
-
-detections = cc.classify_image(
-    "coco/val2017/000000000139.jpg",
-    score_threshold=0.5
-)
-cc.print_detections(detections)
-```
+In each class folder, `representation_gap_entropy.png` shows all target images for that class in the background, the candidate subset on top, and Kernel Herding selections circled. The dashed horizontal line is the class-specific low-entropy cutoff. The dashed vertical line is the class-specific high-representation-gap cutoff. Candidate points are the class points that fall below the entropy cutoff and to the right of the representation-gap cutoff, while also not being complete density outliers.
 
 Running `main.py` creates:
 

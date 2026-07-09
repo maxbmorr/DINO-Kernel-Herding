@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from sklearn.decomposition import PCA
-from sklearn.neighbors import KernelDensity
+from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import StandardScaler
 
 import __utils__ as ut
@@ -18,7 +18,7 @@ class EntropyModel:
     class_ids: np.ndarray
     class_names: list
     priors: np.ndarray
-    kde_by_class: dict
+    nce_by_class: dict
     training_embeddings_by_class: dict
     entropy_threshold: float
     density_threshold: float
@@ -26,7 +26,6 @@ class EntropyModel:
     representation_gap_threshold: float
     class_thresholds: dict
     gamma: float
-    bandwidth: float
 
 
 def _filter_labeled_rows(X, label_ids, metadata):
@@ -49,13 +48,59 @@ def _normalized_entropy(probabilities):
     entropy = -np.sum(probabilities * np.log(probabilities + 1e-12), axis=1)
     if class_count <= 1:
         return np.zeros_like(entropy)
-    return entropy / np.log(class_count)
+    return np.maximum(entropy / np.log(class_count), 0.0)
+
+
+def fit_nce_density(X_class, noise_ratio=5, random_state=42):
+    variance = np.var(X_class, axis=0)
+    variance = np.maximum(variance, 1e-4)
+    mean = np.mean(X_class, axis=0)
+
+    rng = np.random.default_rng(random_state)
+    noise_count = max(1, int(len(X_class) * noise_ratio))
+    noise = rng.normal(
+        loc=mean,
+        scale=np.sqrt(variance),
+        size=(noise_count, X_class.shape[1]),
+    )
+
+    X_binary = np.vstack([X_class, noise])
+    y_binary = np.concatenate([
+        np.ones(len(X_class), dtype=int),
+        np.zeros(noise_count, dtype=int),
+    ])
+
+    classifier = LogisticRegression(max_iter=1000)
+    classifier.fit(X_binary, y_binary)
+
+    return {
+        "classifier": classifier,
+        "mean": mean,
+        "variance": variance,
+        "noise_ratio": noise_count / len(X_class),
+    }
+
+
+def gaussian_log_probability(X, mean, variance):
+    centered = X - mean
+    log_det = np.sum(np.log(2 * np.pi * variance))
+    quadratic = np.sum((centered * centered) / variance, axis=1)
+    return -0.5 * (log_det + quadratic)
+
+
+def nce_log_density(nce_model, X):
+    logit = nce_model["classifier"].decision_function(X)
+    noise_log_probability = gaussian_log_probability(
+        X,
+        nce_model["mean"],
+        nce_model["variance"],
+    )
+    return logit + noise_log_probability + np.log(nce_model["noise_ratio"])
 
 
 def fit_entropy_model(
     learning_dir="saved_vectors/learning",
     calibration_dir="saved_vectors/testing",
-    bandwidth=2.0,
     entropy_percentile=25,
     density_percentile=75,
     outlier_density_percentile=1,
@@ -69,12 +114,12 @@ def fit_entropy_model(
     )
 
     if len(train_label_ids) == 0:
-        raise ValueError("No labeled learning images found for KDE entropy model.")
+        raise ValueError("No labeled learning images found for NCE entropy model.")
 
     scaler = StandardScaler()
     X_train_scaled = scaler.fit_transform(X_train)
 
-    kde_by_class = {}
+    nce_by_class = {}
     training_embeddings_by_class = {}
     class_ids = []
     class_names = []
@@ -90,24 +135,24 @@ def fit_entropy_model(
             "label_name",
         ].iloc[0]
 
-        kde = KernelDensity(kernel="gaussian", bandwidth=bandwidth)
-        kde.fit(X_train_scaled[class_indices])
-
-        kde_by_class[int(label_id)] = kde
+        nce_by_class[int(label_id)] = fit_nce_density(
+            X_train_scaled[class_indices],
+            random_state=42 + int(label_id),
+        )
         training_embeddings_by_class[int(label_id)] = X_train_scaled[class_indices]
         class_ids.append(int(label_id))
         class_names.append(class_name)
         priors.append(len(class_indices) / len(train_label_ids))
 
-    if not kde_by_class:
-        raise ValueError("No classes had enough labeled samples to fit KDE models.")
+    if not nce_by_class:
+        raise ValueError("No classes had enough labeled samples to fit NCE models.")
 
     model = EntropyModel(
         scaler=scaler,
         class_ids=np.array(class_ids),
         class_names=class_names,
         priors=np.array(priors),
-        kde_by_class=kde_by_class,
+        nce_by_class=nce_by_class,
         training_embeddings_by_class=training_embeddings_by_class,
         entropy_threshold=0.0,
         density_threshold=0.0,
@@ -115,7 +160,6 @@ def fit_entropy_model(
         representation_gap_threshold=0.0,
         class_thresholds={},
         gamma=1.0 / X_train_scaled.shape[1],
-        bandwidth=bandwidth,
     )
 
     calibration_scores = score_directory(model, calibration_dir, save_csv=False)
@@ -139,10 +183,10 @@ def fit_entropy_model(
     )
     apply_class_thresholds(model, calibration_scores)
 
-    print(f"Fit KDE entropy model on {len(train_label_ids)} labeled images from {learning_dir}")
+    print(f"Fit NCE entropy model on {len(train_label_ids)} labeled images from {learning_dir}")
     print(f"Classes modeled: {len(model.class_ids)}")
     print(f"Low entropy threshold ({entropy_percentile}%): {model.entropy_threshold:.3f}")
-    print(f"High KDE density threshold ({density_percentile}%): {model.density_threshold:.3f}")
+    print(f"High NCE density threshold ({density_percentile}%): {model.density_threshold:.3f}")
     print(
         f"Complete outlier density threshold "
         f"({outlier_density_percentile}%): {model.outlier_density_threshold:.3f}"
@@ -272,7 +316,7 @@ def score_embeddings(model, X, metadata):
     X_scaled = model.scaler.transform(X)
 
     log_densities = np.column_stack([
-        model.kde_by_class[int(label_id)].score_samples(X_scaled)
+        nce_log_density(model.nce_by_class[int(label_id)], X_scaled)
         for label_id in model.class_ids
     ])
     log_priors = np.log(model.priors + 1e-12)
@@ -382,15 +426,21 @@ def select_interesting_with_kernel_herding(
     input_dir,
     scores,
     selection_count=25,
-    per_class=True,
+    per_class=False,
+    candidate_pool="all",
     save_csv=True,
 ):
-    X, label_ids, _, _, metadata, _ = ut.load_DINO_vectors(input_dir)
-    candidate_mask = scores["herding_candidate"]
-    candidate_indices = scores.index[candidate_mask].to_numpy()
-
-    if len(candidate_indices) == 0:
+    X, _, _, _, _, _ = ut.load_DINO_vectors(input_dir)
+    if candidate_pool == "all":
+        candidate_indices = np.arange(len(scores))
+    elif candidate_pool == "interesting":
         candidate_indices = scores.index[scores["interesting"]].to_numpy()
+    elif candidate_pool == "candidate":
+        candidate_indices = scores.index[scores["herding_candidate"]].to_numpy()
+    else:
+        raise ValueError(
+            "candidate_pool must be one of: 'all', 'interesting', or 'candidate'."
+        )
 
     if len(candidate_indices) == 0:
         candidate_indices = np.arange(len(scores))
@@ -439,12 +489,16 @@ def select_interesting_with_kernel_herding(
             .reset_index()
             .sort_values(["interesting_subset", "herding_selected"], ascending=False)
         )
-        scores.loc[candidate_indices].to_csv(output_path / "interesting_subset.csv", index=False)
+        subset_indices = scores.index[scores["herding_candidate"]].to_numpy()
+        scores.loc[subset_indices].to_csv(output_path / "interesting_subset.csv", index=False)
         selected.to_csv(output_path / "herding_selection.csv", index=False)
         subset_summary.to_csv(output_path / "class_subset_summary.csv", index=False)
         scores.to_csv(output_path / "entropy_scores.csv", index=False)
         print(f"Saved interesting candidate subset -> {output_path / 'interesting_subset.csv'}")
-        print(f"Saved Kernel Herding selection -> {output_path / 'herding_selection.csv'}")
+        print(
+            f"Saved Kernel Herding selection "
+            f"({candidate_pool} pool) -> {output_path / 'herding_selection.csv'}"
+        )
         print(f"Saved class subset summary -> {output_path / 'class_subset_summary.csv'}")
 
     return selected, scores
@@ -455,7 +509,7 @@ def save_subset_visualizations(input_dir, scores, set_name="target_subset"):
     if not output_path.is_absolute():
         output_path = ut.PROJECT_ROOT / output_path
 
-    X, label_ids, _, _, metadata, _ = ut.load_DINO_vectors(input_dir)
+    X, _, _, _, _, _ = ut.load_DINO_vectors(input_dir)
     subset_mask = scores["herding_candidate"].fillna(False).to_numpy(dtype=bool)
     selected_mask = scores["herding_selected"].fillna(False).to_numpy(dtype=bool)
 
@@ -483,7 +537,7 @@ def save_subset_visualizations(input_dir, scores, set_name="target_subset"):
         linewidths=1.7,
         label="Kernel Herding selected",
     )
-    plt.xlabel("Best KDE log density")
+    plt.xlabel("Best NCE log density")
     plt.ylabel("Normalized entropy")
     plt.title(f"{set_name}: Confident In-Distribution Poorly Represented Subset")
     plt.legend()
@@ -492,7 +546,6 @@ def save_subset_visualizations(input_dir, scores, set_name="target_subset"):
     plt.savefig(subset_entropy_plot, dpi=160)
     plt.close()
 
-    subset_or_selected = subset_mask | selected_mask
     X_scaled = StandardScaler().fit_transform(X)
     points_2d = PCA(n_components=2, random_state=42).fit_transform(X_scaled)
 
@@ -534,7 +587,7 @@ def save_class_subset_visualizations(input_dir, scores):
     graph_root = output_path / "class_subset_graphs"
     graph_root.mkdir(parents=True, exist_ok=True)
 
-    X, label_ids, _, _, metadata, _ = ut.load_DINO_vectors(input_dir)
+    X, _, _, _, _, _ = ut.load_DINO_vectors(input_dir)
     X_scaled = StandardScaler().fit_transform(X)
     points_2d = PCA(n_components=2, random_state=42).fit_transform(X_scaled)
 
@@ -543,11 +596,12 @@ def save_class_subset_visualizations(input_dir, scores):
     class_names = scores["threshold_label_name"].fillna("unknown")
 
     saved_count = 0
-    for class_name in sorted(class_names[subset_mask].unique()):
+    graph_mask = subset_mask | selected_mask
+    for class_name in sorted(class_names[graph_mask].unique()):
         all_class_mask = class_names == class_name
         class_mask = subset_mask & (class_names == class_name)
         class_selected_mask = selected_mask & (class_names == class_name)
-        if class_mask.sum() == 0:
+        if class_mask.sum() == 0 and class_selected_mask.sum() == 0:
             continue
 
         class_dir = graph_root / safe_folder_name(class_name)
@@ -647,7 +701,7 @@ def save_visualizations(input_dir, scores, set_name="target"):
     if not output_path.is_absolute():
         output_path = ut.PROJECT_ROOT / output_path
 
-    X, label_ids, _, _, metadata, _ = ut.load_DINO_vectors(input_dir)
+    X, _, _, _, _, _ = ut.load_DINO_vectors(input_dir)
     if "herding_selected" in scores.columns:
         selected_mask = scores["herding_selected"].fillna(False).to_numpy(dtype=bool)
     else:
@@ -686,9 +740,9 @@ def save_visualizations(input_dir, scores, set_name="target"):
         linewidths=1.5,
         label="Kernel Herding selected",
     )
-    plt.xlabel("Best KDE log density")
+    plt.xlabel("Best NCE log density")
     plt.ylabel("Normalized entropy")
-    plt.title(f"{set_name}: KDE Entropy vs Density")
+    plt.title(f"{set_name}: NCE Entropy vs Density")
     plt.legend()
     plt.tight_layout()
     entropy_plot = output_path / f"{set_name}_entropy_density_plot.png"
@@ -758,6 +812,8 @@ def run_entropy_analysis(
     calibration_dir="saved_vectors/testing",
     target_dir="saved_vectors/testing",
     herding_count=3,
+    herding_candidate_pool="all",
+    herding_per_class=False,
     top_n=10,
 ):
     model = fit_entropy_model(
@@ -773,11 +829,14 @@ def run_entropy_analysis(
         target_dir,
         target_scores,
         selection_count=herding_count,
+        per_class=herding_per_class,
+        candidate_pool=herding_candidate_pool,
     )
     save_visualizations(target_dir, target_scores, set_name="target")
     save_subset_visualizations(target_dir, target_scores, set_name="target_subset")
     save_class_subset_visualizations(target_dir, target_scores)
     print_interesting_summary(target_scores, top_n=top_n)
     print(f"Kernel Herding selected {len(selected)} images")
+    print(f"Kernel Herding candidate pool: {herding_candidate_pool}")
     print(f"Kernel Herding candidates came only from {target_dir}")
     return model, learning_scores, target_scores, selected

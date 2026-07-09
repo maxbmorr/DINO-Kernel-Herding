@@ -133,7 +133,7 @@ def save_vector_split(output_dir, X, label_ids, metadata, class_mapping):
     class_mapping.to_csv(output_dir / "class_mapping.csv", index=False)
 
 def split_DINO_vectors(input_dir="saved_vectors", test_size=0.2, random_state=42):
-    X, label_ids, label_names, paths, metadata, class_mapping = load_DINO_vectors(input_dir)
+    X, label_ids, _, _, metadata, class_mapping = load_DINO_vectors(input_dir)
     rng = np.random.default_rng(random_state)
 
     learning_indices = []
