@@ -1,16 +1,21 @@
 import __utils__ as ut
 import embedding_classifier as ec
+import evaluate_surprisal_tradeoff as tradeoff_eval
+import export_selected_images as exporter
 import optimization as opt
 import subset_probability as sp
+import random
 
 CREATE_DINO_DATASET = False
 SPLIT_DINO_DATASET = True
 RUN_EMBEDDING_CLASSIFIER = True
 RUN_SUBSET_PROBABILITY = True
 RUN_OPTIMIZATION = True
+RUN_EXPORT_SELECTED_IMAGES = True
+RUN_SURPRISAL_TRADEOFF_EVALUATION = False
 
 OPTIMIZATION_SELECTION_COUNT = 4
-OPTIMIZATION_PROBABILITY_LAMBDA = 0
+OPTIMIZATION_PROBABILITY_LAMBDA = 0.025
 OPTIMIZATION_KERNEL = "cosine"  # "cosine" or "rbf"
 OPTIMIZATION_STOP_WHEN_OBJECTIVE_DECREASES = True
 
@@ -27,7 +32,7 @@ if CREATE_DINO_DATASET:
     print("Image count:", len(paths))
 
 if SPLIT_DINO_DATASET:
-    ut.split_DINO_vectors("saved_vectors", test_size=0.2, random_state=42)
+    ut.split_DINO_vectors("saved_vectors", test_size=0.2, random_state= int(100*random.random()))
 
 if RUN_EMBEDDING_CLASSIFIER:
     ec.train_and_evaluate(
@@ -50,3 +55,9 @@ if RUN_OPTIMIZATION:
         kernel=OPTIMIZATION_KERNEL,
         stop_when_objective_decreases=OPTIMIZATION_STOP_WHEN_OBJECTIVE_DECREASES,
     )
+
+if RUN_EXPORT_SELECTED_IMAGES:
+    exporter.export_selected_images()
+
+if RUN_SURPRISAL_TRADEOFF_EVALUATION:
+    tradeoff_eval.run_surprisal_tradeoff_evaluation()

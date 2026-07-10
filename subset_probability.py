@@ -22,23 +22,21 @@ def _filter_labeled_rows(X, label_ids, metadata):
     return X[labeled_mask], label_ids[labeled_mask], metadata[labeled_mask]
 
 
-def fit_nce_density(X_class, noise_ratio=5, random_state=42):
-    variance = np.var(X_class, axis=0)
-    variance = np.maximum(variance, 1e-4)
-    mean = np.mean(X_class, axis=0)
-
+def fit_nce_density(X_class, X_noise_pool, noise_ratio=5, random_state=42):
     rng = np.random.default_rng(random_state)
     noise_count = max(1, int(len(X_class) * noise_ratio))
-    noise = rng.normal(
-        loc=mean,
-        scale=np.sqrt(variance),
-        size=(noise_count, X_class.shape[1]),
+    noise_indices = rng.choice(
+        len(X_noise_pool),
+        size=min(noise_count, len(X_noise_pool)),
+        replace=False,
     )
+    noise = X_noise_pool[noise_indices]
+    actual_noise_count = len(noise)
 
     X_binary = np.vstack([X_class, noise])
     y_binary = np.concatenate([
         np.ones(len(X_class), dtype=int),
-        np.zeros(noise_count, dtype=int),
+        np.zeros(actual_noise_count, dtype=int),
     ])
 
     classifier = LogisticRegression(max_iter=1000)
@@ -46,9 +44,7 @@ def fit_nce_density(X_class, noise_ratio=5, random_state=42):
 
     return {
         "classifier": classifier,
-        "mean": mean,
-        "variance": variance,
-        "noise_ratio": noise_count / len(X_class),
+        "noise_ratio": actual_noise_count / len(X_class),
     }
 
 
@@ -60,13 +56,7 @@ def gaussian_log_probability(X, mean, variance):
 
 
 def nce_log_density(nce_model, X):
-    logit = nce_model["classifier"].decision_function(X)
-    noise_log_probability = gaussian_log_probability(
-        X,
-        nce_model["mean"],
-        nce_model["variance"],
-    )
-    return logit + noise_log_probability + np.log(nce_model["noise_ratio"])
+    return nce_model["classifier"].decision_function(X)
 
 
 def nce_positive_probability(nce_model, X):
@@ -106,14 +96,24 @@ def fit_subset_probability_model(
             class_mapping["label_id"] == label_id,
             "label_name",
         ].iloc[0]
+        noise_indices = np.where(label_ids != label_id)[0]
+        if len(noise_indices) == 0:
+            print(
+                f"[NCE {class_number}/{len(unique_label_ids)}] "
+                f"Skipping '{class_name}': no non-subset noise examples"
+            )
+            continue
         print(
             f"[NCE {class_number}/{len(unique_label_ids)}] "
-            f"Fitting '{class_name}' with {len(class_indices)} labeled images"
+            f"Fitting '{class_name}' with {len(class_indices)} positives "
+            f"and {len(noise_indices)} non-subset noise examples"
         )
         X_class = X_train_scaled[class_indices]
+        X_noise_pool = X_train_scaled[noise_indices]
 
         nce_by_class[int(label_id)] = fit_nce_density(
             X_class,
+            X_noise_pool,
             random_state=42 + int(label_id),
         )
 

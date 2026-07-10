@@ -14,6 +14,8 @@ The DINO vector pipeline is still available, but it is behind flags in `main.py`
 - `RUN_EMBEDDING_CLASSIFIER`: trains and tests a classifier using labeled DINO vectors.
 - `RUN_SUBSET_PROBABILITY`: estimates positive-membership probability for each target image against each learned class/subset using NCE.
 - `RUN_OPTIMIZATION`: selects target images using a von Neumann entropy objective with a log-probability term.
+- `RUN_EXPORT_SELECTED_IMAGES`: copies selected target images into organized review folders.
+- `RUN_SURPRISAL_TRADEOFF_EVALUATION`: runs the class/lambda surprisal trade-off sweep and exports visual comparison folders.
 
 ## Dependencies
 
@@ -148,7 +150,7 @@ The subset probability code is in `subset_probability.py`.
 
 It estimates \(\hat P_+(x)\), the probability that a target image is a positive example for each learned class/subset, using NCE:
 
-- NCE: trains one binary noise-contrastive model per class using real class embeddings versus Gaussian noise.
+- NCE: trains one binary noise-contrastive model per class using real class embeddings as positives and labeled images from other classes as non-subset noise.
 
 Both models use DINO embeddings from:
 
@@ -266,6 +268,75 @@ Important columns in `optimization_selection.csv`:
 - `subset_probability`: compatibility alias for `positive_probability`
 - `best_predicted_subset_label_name`: subset with the highest probability for this image
 - `best_predicted_subset_probability`: probability of that best predicted subset
+
+## Selected Image Export
+
+The selected image exporter is in `export_selected_images.py`.
+
+When this switch is enabled in `main.py`:
+
+```python
+RUN_EXPORT_SELECTED_IMAGES = True
+```
+
+the selected target images are copied into:
+
+```text
+organized_selected_images/
+```
+
+Each subset gets its own folder. The image filenames include selection rank,
+\(\hat P_+(x)\), entropy gain, actual label if available, and the best predicted
+subset. The originals are not moved or modified.
+
+## Surprisal Trade-Off Evaluation
+
+The systematic trade-off evaluator is in `evaluate_surprisal_tradeoff.py`.
+
+It evaluates selected target classes across multiple values of the surprisal
+trade-off:
+
+```text
+H(labeled subset c + selected target images)
+- lambda * sum(-log(P_hat_+(x)))
+```
+
+This is the same as:
+
+```text
+H(labeled subset c + selected target images)
++ lambda * sum(log(P_hat_+(x)))
+```
+
+The main controls are at the top of `evaluate_surprisal_tradeoff.py`:
+
+```python
+TARGET_CLASSES = ["person", "car", "bus", "motorcycle", "cow", "dog", "zebra", "dining table"]
+SURPRISAL_LAMBDAS = [0.0, 0.01, 0.05, 0.1, 0.25]
+SELECTION_COUNT = 4
+```
+
+Run:
+
+```powershell
+python evaluate_surprisal_tradeoff.py
+```
+
+Or turn it on from `main.py`:
+
+```python
+RUN_SURPRISAL_TRADEOFF_EVALUATION = True
+```
+
+It writes:
+
+```text
+surprisal_tradeoff_evaluation/
+```
+
+Inside that folder, each target class has one folder per lambda value. Each
+lambda folder contains the selected images, a `selection.csv`, and a
+`contact_sheet.jpg` for quick visual review.
 
 ## Distribution Graphs
 
