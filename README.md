@@ -12,10 +12,11 @@ The DINO vector pipeline is still available, but it is behind flags in `main.py`
 - `CREATE_DINO_DATASET`: creates DINO feature vectors from COCO or class-folder images.
 - `SPLIT_DINO_DATASET`: splits saved DINO vectors into learning/testing folders.
 - `RUN_EMBEDDING_CLASSIFIER`: trains and tests a classifier using labeled DINO vectors.
-- `RUN_SUBSET_PROBABILITY`: estimates positive-membership probability for each target image against each learned class/subset using NCE.
+- `RUN_SUBSET_PROBABILITY`: estimates calibrated multi-label membership probability for each target image and class/subset.
 - `RUN_OPTIMIZATION`: selects target images using a von Neumann entropy objective with a log-probability term.
 - `RUN_EXPORT_SELECTED_IMAGES`: copies selected target images into organized review folders.
 - `RUN_SURPRISAL_TRADEOFF_EVALUATION`: runs the class/lambda surprisal trade-off sweep and exports visual comparison folders.
+- `RUN_LAMBDA_SELECTION_ACCURACY_EVALUATION`: uses true labels after selection to generate lambda accuracy CSVs and graphs.
 
 ## Dependencies
 
@@ -144,15 +145,54 @@ metadata.csv
 class_mapping.csv
 ```
 
-## Subset Probability
+## Calibrated Subset Probability
 
 The subset probability code is in `subset_probability.py`.
 
-It estimates \(\hat P_+(x)\), the probability that a target image is a positive example for each learned class/subset, using NCE:
+It estimates \(\hat P_+(x)\), the calibrated probability that a target image contains each learned class/subset.
 
-- NCE: trains one binary noise-contrastive model per class using real class embeddings as positives and labeled images from other classes as non-subset noise.
+The model uses all COCO labels in `all_label_ids`, not only the primary label. An image containing both a person and a dog is therefore positive for both classes. This avoids treating secondary objects as false negatives.
 
-Both models use DINO embeddings from:
+For each class, the pipeline:
+
+- creates a natural one-vs-rest target using all annotated objects
+- divides the learning set into up to five stratified folds
+- tunes logistic regularization `C` inside each training fold using an inner stratified cross-validation and log loss
+- trains the tuned class-balanced logistic regression on the outer training folds and predicts the held-out fold
+- repeats until every learning image has one out-of-fold decision score
+- fits a sigmoid calibrator on all out-of-fold scores at the natural class frequency
+- tunes `C` again and refits the final logistic classifier on the complete learning set
+- derives a class-specific threshold targeting 80% precision
+
+The regularization search grid is:
+
+```python
+REGULARIZATION_C_VALUES = [0.001, 0.01, 0.1, 1.0, 10.0]
+```
+
+Smaller `C` values apply stronger regularization. Each class selects its own
+value using nested cross-validated log loss, which penalizes confident incorrect
+predictions. This changes the calibrated probability input but does not change
+the entropy objective, candidate set, or greedy optimization algorithm.
+
+Regularization tuning can be disabled in `main.py` when faster probability
+model fitting is more important:
+
+```python
+TUNE_CLASSIFIER_REGULARIZATION = True
+FIXED_CLASSIFIER_C = 1.0
+```
+
+When tuning is `True`, each class uses the nested log-loss search described
+above. When it is `False`, all outer-fold classifiers and the final classifier
+use `FIXED_CLASSIFIER_C`; five-fold out-of-fold calibration still runs. Fixed
+mode therefore preserves probability calibration while avoiding the inner
+regularization searches. Changing this switch affects probability estimates,
+not the downstream entropy optimization formula.
+
+Classes need at least six positive and six negative learning examples. Classes below that minimum are skipped because their probabilities cannot be calibrated reliably.
+
+The classifiers use DINO embeddings from:
 
 ```text
 saved_vectors/learning/
@@ -164,36 +204,51 @@ Then the target images from:
 saved_vectors/testing/
 ```
 
-are scored against every learned class/subset. The probability used by optimization is:
+are scored against every calibrated class/subset model. The probability used by optimization is:
 
 ```text
-P_hat_+(x) = P_NCE(real subset example | x)
+P_hat_+(x) = calibrated P(class appears in image | DINO embedding)
 ```
 
-The result is not normalized across classes. Each class/subset gets its own
-positive probability for the image.
+The result is not normalized across classes because COCO images can contain multiple classes. Each class gets an independent probability and class-specific decision threshold.
 
 Running `main.py` with `RUN_SUBSET_PROBABILITY = True` writes:
 
 ```text
 saved_vectors/testing/subset_probability_scores.csv
 saved_vectors/testing/subset_probability_matrix.csv
+saved_vectors/testing/subset_probability_raw_matrix.csv
+saved_vectors/testing/subset_probability_calibration_metrics.csv
+saved_vectors/testing/subset_probability_evaluation_metrics.csv
 ```
 
 Important columns in `subset_probability_scores.csv`:
 
 - `path`: image path
-- `predicted_subset_label_id`: class/subset with the highest averaged probability
+- `predicted_subset_label_id`: class/subset with the highest calibrated probability
 - `predicted_subset_label_name`: name of that class/subset
-- `positive_probability`: \(\hat P_+(x)\) for the selected subset
+- `positive_probability`: calibrated \(\hat P_+(x)\) for the highest-scoring subset
 - `subset_probability`: compatibility alias for `positive_probability`
-- `probability_method`: currently `nce`
-- `nce_positive_probability`: NCE \(\hat P_+(x)\) for the selected subset
-- `nce_log_density`: NCE log-density score for the selected subset
+- `raw_positive_probability`: uncalibrated logistic regression output
+- `second_positive_probability`: calibrated probability of the runner-up subset
+- `top_two_probability_margin`: difference between the top two probabilities
+- `predicted_class_threshold`: calibrated decision threshold for the top subset
+- `passes_predicted_class_threshold`: whether the top score passes that threshold
+- `classes_above_threshold`: number of independently detected subsets
+- `probability_method`: `calibrated_multilabel_ovr`
 - `actual_label_id`: known label, if the target folder has labels
 - `actual_label_name`: known label name, if the target folder has labels
+- `actual_all_label_ids`: all known COCO labels for the target image
 
-`subset_probability_matrix.csv` stores one `*_positive_probability` column per learned class/subset.
+`subset_probability_matrix.csv` stores calibrated values in one `*_positive_probability` column per class. `subset_probability_raw_matrix.csv` stores the corresponding uncalibrated outputs for auditing.
+
+The calibration metrics CSV reports the calibration method, fold count,
+candidate and selected `C` values, per-outer-fold `C` values, out-of-fold sample
+counts, threshold, Brier score, expected calibration error, and average
+precision. The evaluation metrics CSV reports those metrics plus precision and
+recall on the independent testing split. Every learning image is held out
+exactly once for calibration scoring; testing images are never used to fit the
+classifier, regularization search, or calibrator.
 
 This does not draw boxes or detect multiple objects. It answers: given this image's DINO embedding, how positive/subset-like is it for each learned subset?
 
@@ -211,9 +266,15 @@ saved_vectors/testing/subset_probability_matrix.csv
 
 For each learned subset/class, it:
 
-- takes the labeled DINO embeddings from that subset as the reference set
+- takes every learning image containing that class in `all_label_ids` as the reference set
 - considers every target/testing image for that subset
 - greedily selects images that maximize normalized von Neumann entropy of the kernel matrix plus a log-probability term
+
+The candidate set and objective are unchanged between rounds. For efficiency,
+the implementation caches the reference-to-reference and
+reference-to-candidate kernel blocks, then computes only the kernel rows and
+entropy values that depend on the current greedy selections. Every testing
+image is still eligible for every subset.
 
 In plain terms, it asks:
 
@@ -233,14 +294,37 @@ There is no hard rule that a target image must first be predicted as subset `c`.
 Every target image can be considered for every subset. The subset membership
 pressure enters through the `lambda * log(P_hat_+(x))` term.
 
+When `OPTIMIZATION_STOP_WHEN_OBJECTIVE_DECREASES` is enabled, the best remaining
+candidate is accepted only when its combined marginal gain is positive:
+
+```text
+delta H_vN(x | S) + lambda * log(P_hat_+(x)) > 0
+```
+
+Selection stops for the class when even the best remaining candidate has zero
+or negative combined gain.
+
 The main controls are in `main.py`:
 
 ```python
-OPTIMIZATION_SELECTION_COUNT = 4
-OPTIMIZATION_PROBABILITY_LAMBDA = 0.1
-OPTIMIZATION_KERNEL = "cosine"
+OPTIMIZATION_SELECTION_COUNT = 5
+OPTIMIZATION_PROBABILITY_LAMBDA = 0.005
+OPTIMIZATION_KERNEL = "rbf"
 OPTIMIZATION_STOP_WHEN_OBJECTIVE_DECREASES = True
+USE_KERNEL_HERDED_REFERENCES = True
+KERNEL_HERDED_REFERENCE_COUNT = 50
 ```
+
+When `USE_KERNEL_HERDED_REFERENCES` is enabled, known learning labels first
+define each class subset. Kernel herding then compresses that subset to 50
+representative DINO embeddings by greedily matching its kernel mean. All von
+Neumann entropy and candidate calculations use this herded reference coreset.
+True testing labels are not used.
+
+Set `USE_KERNEL_HERDED_REFERENCES = False` to use every labeled embedding in
+each class. There is no random reference sampling or cap in this mode. Classes
+smaller than `KERNEL_HERDED_REFERENCE_COUNT` already use every labeled embedding
+when herding is enabled.
 
 Running `main.py` with `RUN_OPTIMIZATION = True` writes:
 
@@ -255,7 +339,7 @@ Important columns in `optimization_selection.csv`:
 - `path`: selected target image
 - `optimization_rank`: greedy selection order inside that subset
 - `kernel`: kernel used for the von Neumann entropy calculation
-- `stop_when_objective_decreases`: whether selection stops when no remaining image improves the objective
+- `stop_when_objective_decreases`: whether selection requires positive combined objective gain
 - `objective`: value of `H + lambda * sum(log(P_hat_+(x)))` after this image is selected
 - `objective_gain`: change in the objective from selecting this image
 - `probability_lambda`: scalar lambda used in the log-probability term
@@ -311,9 +395,12 @@ H(labeled subset c + selected target images)
 The main controls are at the top of `evaluate_surprisal_tradeoff.py`:
 
 ```python
-TARGET_CLASSES = ["person", "car", "bus", "motorcycle", "cow", "dog", "zebra", "dining table"]
-SURPRISAL_LAMBDAS = [0.0, 0.01, 0.05, 0.1, 0.25]
+TARGET_CLASSES = []  # every calibrated class
+SURPRISAL_LAMBDAS = [0.0, 0.001, 0.005, 0.01, 0.025]
 SELECTION_COUNT = 4
+KERNEL = "rbf"
+USE_KERNEL_HERDED_REFERENCES = True
+MAX_LABELED_REFERENCE_PER_SUBSET = 30
 ```
 
 Run:
@@ -331,12 +418,50 @@ RUN_SURPRISAL_TRADEOFF_EVALUATION = True
 It writes:
 
 ```text
-surprisal_tradeoff_evaluation/
+_surprisal_tradeoff_evaluation/
 ```
 
 Inside that folder, each target class has one folder per lambda value. Each
 lambda folder contains the selected images, a `selection.csv`, and a
 `contact_sheet.jpg` for quick visual review.
+
+The root also contains `lambda_summary.csv`, which reports total selections,
+classes with at least one selection, mean selections per class, and aggregate
+objective and entropy values for each lambda.
+
+### Label-Only Lambda Accuracy Evaluation
+
+Ground-truth COCO labels are never used by probability scoring or optimization.
+After a sweep finishes, they can be used strictly for evaluation:
+
+```powershell
+python evaluate_lambda_selection_accuracy.py
+```
+
+Or enable only the corresponding switch in `main.py` after sweep outputs exist:
+
+```python
+RUN_LAMBDA_SELECTION_ACCURACY_EVALUATION = True
+```
+
+It defaults to `False`, so normal pipeline runs do not use true labels for this
+evaluation or regenerate its graphs.
+
+A selection is correct when the optimized subset appears anywhere in the
+image's `all_label_ids`. This produces:
+
+```text
+_surprisal_tradeoff_evaluation/lambda_accuracy_summary.csv
+_surprisal_tradeoff_evaluation/lambda_class_accuracy.csv
+_surprisal_tradeoff_evaluation/labeled_tradeoff_selections.csv
+_surprisal_tradeoff_evaluation/lambda_selection_accuracy.png
+_surprisal_tradeoff_evaluation/lambda_class_accuracy_heatmap.png
+```
+
+`lambda_selection_accuracy.png` compares precision, correct/incorrect counts,
+and the quantity/correctness trade-off. The heatmap shows selection precision
+for every class and lambda. These metrics must not be fed back into a selection
+run except when choosing a global lambda on a designated validation split.
 
 ## Distribution Graphs
 
@@ -354,7 +479,7 @@ The graphs are saved in:
 distribution_graphs/
 ```
 
-The current graphs show NCE positive-membership probability distributions, predicted subset counts, optimization selection counts, objective gains, entropy gains, and probability vs entropy gain for selected images.
+The current graphs show calibrated multi-label probability distributions, predicted subset counts, optimization selection counts, objective gains, entropy gains, and probability vs entropy gain for selected images.
 
 Running `main.py` creates:
 

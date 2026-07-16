@@ -15,26 +15,16 @@ LEARNING_DIR = ut.PROJECT_ROOT / "saved_vectors" / "learning"
 TARGET_DIR = ut.PROJECT_ROOT / "saved_vectors" / "testing"
 PROBABILITY_SCORES_PATH = TARGET_DIR / "subset_probability_scores.csv"
 PROBABILITY_MATRIX_PATH = TARGET_DIR / "subset_probability_matrix.csv"
-OUTPUT_DIR = ut.PROJECT_ROOT / "surprisal_tradeoff_evaluation"
+OUTPUT_DIR = ut.PROJECT_ROOT / "_surprisal_tradeoff_evaluation"
 
-# Edit these for the systematic sweep you want.
-# Use [] to evaluate every class with enough labeled examples.
-TARGET_CLASSES = [
-    "person",
-    "car",
-    "bus",
-    "motorcycle",
-    "cow",
-    "dog",
-    "zebra",
-    "dining table",
-]
-SURPRISAL_LAMBDAS = [0.0, 0.01, 0.05, 0.1, 0.25]
+# An empty target list evaluates every class represented in the calibrated matrix.
+TARGET_CLASSES = []
+SURPRISAL_LAMBDAS = [0.0, 0.001, 0.005, 0.01, 0.025]
 SELECTION_COUNT = 4
-KERNEL = "cosine"
+KERNEL = "rbf"
 STOP_WHEN_OBJECTIVE_DECREASES = True
-MAX_LABELED_REFERENCE_PER_SUBSET = 200
-RANDOM_STATE = 42
+USE_KERNEL_HERDED_REFERENCES = True
+MAX_LABELED_REFERENCE_PER_SUBSET = 30
 CONTACT_SHEET_THUMB_SIZE = (220, 160)
 
 
@@ -55,7 +45,7 @@ def _load_inputs():
             "subset_probability_matrix.csv exist."
         )
 
-    X_learning, learning_label_ids, _, _, _, class_mapping = ut.load_DINO_vectors(
+    X_learning, learning_label_ids, _, _, learning_metadata, class_mapping = ut.load_DINO_vectors(
         LEARNING_DIR
     )
     X_target, _, _, _, target_metadata, _ = ut.load_DINO_vectors(TARGET_DIR)
@@ -70,6 +60,7 @@ def _load_inputs():
     labeled_mask = learning_label_ids >= 0
     X_learning = X_learning[labeled_mask]
     learning_label_ids = learning_label_ids[labeled_mask]
+    learning_metadata = learning_metadata.loc[labeled_mask].reset_index(drop=True)
 
     scaler = StandardScaler()
     X_learning_scaled = scaler.fit_transform(X_learning)
@@ -78,6 +69,7 @@ def _load_inputs():
     return {
         "X_learning": X_learning_scaled,
         "learning_label_ids": learning_label_ids,
+        "learning_metadata": learning_metadata,
         "X_target": X_target_scaled,
         "target_metadata": target_metadata,
         "class_mapping": class_mapping,
@@ -171,7 +163,7 @@ def _evaluate_one_class(inputs, class_row, surprisal_lambda):
     label_id = int(class_row["label_id"])
     class_name = class_row["label_name"]
     probability_column = f"{class_name}_positive_probability"
-    class_mask = inputs["learning_label_ids"] == label_id
+    class_mask = opt._metadata_has_label(inputs["learning_metadata"], label_id)
 
     if class_mask.sum() == 0:
         return [], None
@@ -179,7 +171,9 @@ def _evaluate_one_class(inputs, class_row, surprisal_lambda):
     class_reference = opt._reference_subset(
         inputs["X_learning"][class_mask],
         MAX_LABELED_REFERENCE_PER_SUBSET,
-        RANDOM_STATE + label_id,
+        method=("kernel_herding" if USE_KERNEL_HERDED_REFERENCES else "all"),
+        kernel=KERNEL,
+        gamma=inputs["gamma"],
     )
     base_entropy = opt.von_neumann_entropy(
         class_reference,
@@ -218,6 +212,9 @@ def _evaluate_one_class(inputs, class_row, surprisal_lambda):
             "path": metadata_row["path"],
             "optimization_rank": selected_item["optimization_rank"],
             "kernel": KERNEL,
+            "reference_method": (
+                "kernel_herding" if USE_KERNEL_HERDED_REFERENCES else "all"
+            ),
             "stop_when_objective_decreases": STOP_WHEN_OBJECTIVE_DECREASES,
             "objective": selected_item["objective"],
             "objective_gain": selected_item["objective_gain"],
@@ -237,6 +234,9 @@ def _evaluate_one_class(inputs, class_row, surprisal_lambda):
         "subset_label_id": label_id,
         "subset_label_name": class_name,
         "surprisal_lambda": surprisal_lambda,
+        "reference_method": (
+            "kernel_herding" if USE_KERNEL_HERDED_REFERENCES else "all"
+        ),
         "selected_count": len(rows),
         "labeled_reference_count": int(class_mask.sum()),
         "candidate_count": len(candidate_indices),
@@ -295,8 +295,26 @@ def run_surprisal_tradeoff_evaluation():
     selections.to_csv(OUTPUT_DIR / "all_tradeoff_selections.csv", index=False)
     summary.to_csv(OUTPUT_DIR / "tradeoff_summary.csv", index=False)
 
+    lambda_summary = (
+        summary.groupby("surprisal_lambda", as_index=False)
+        .agg(
+            total_selected=("selected_count", "sum"),
+            classes_with_selections=(
+                "selected_count",
+                lambda values: int((values > 0).sum()),
+            ),
+            mean_selected_per_class=("selected_count", "mean"),
+            median_selected_per_class=("selected_count", "median"),
+            mean_final_objective=("final_objective", "mean"),
+            mean_final_entropy=("final_von_neumann_entropy", "mean"),
+        )
+        .sort_values("surprisal_lambda")
+    )
+    lambda_summary.to_csv(OUTPUT_DIR / "lambda_summary.csv", index=False)
+
     print(f"Saved trade-off evaluation -> {OUTPUT_DIR}")
     print(f"Selected {len(selections)} images across all runs")
+    print(lambda_summary.to_string(index=False))
     return selections, summary
 
 

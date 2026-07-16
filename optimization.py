@@ -36,13 +36,19 @@ def _kernel_matrix(X_left, X_right, kernel, gamma):
     raise ValueError("kernel must be 'rbf' or 'cosine'.")
 
 
-def von_neumann_entropy(X, kernel="rbf", gamma=None):
-    if len(X) <= 1:
-        return 0.0
-    if gamma is None:
-        gamma = 1.0 / X.shape[1]
+def _kernel_diagonal(X, kernel):
+    if kernel == "rbf":
+        return np.ones(len(X), dtype=X.dtype)
+    if kernel == "cosine":
+        squared_norm = np.sum(X * X, axis=1)
+        return ((squared_norm / (squared_norm + 1e-12)) + 1.0) / 2.0
+    raise ValueError("kernel must be 'rbf' or 'cosine'.")
 
-    kernel_matrix = _kernel_matrix(X, X, kernel, gamma)
+
+def _von_neumann_entropy_from_kernel(kernel_matrix):
+    if len(kernel_matrix) <= 1:
+        return 0.0
+
     density_matrix = kernel_matrix / (np.trace(kernel_matrix) + 1e-12)
     eigenvalues = np.linalg.eigvalsh(density_matrix)
     eigenvalues = np.clip(eigenvalues, 1e-12, 1.0)
@@ -54,17 +60,63 @@ def von_neumann_entropy(X, kernel="rbf", gamma=None):
     return float(entropy / max_entropy)
 
 
-def _reference_subset(X_class, max_reference_count, random_state):
-    if len(X_class) <= max_reference_count:
+def von_neumann_entropy(X, kernel="rbf", gamma=None):
+    if gamma is None:
+        gamma = 1.0 / X.shape[1]
+    return _von_neumann_entropy_from_kernel(_kernel_matrix(X, X, kernel, gamma))
+
+
+def kernel_herd_reference_subset(X_class, reference_count, kernel, gamma):
+    if len(X_class) <= reference_count:
         return X_class
 
-    rng = np.random.default_rng(random_state)
-    reference_indices = rng.choice(
-        len(X_class),
-        size=max_reference_count,
-        replace=False,
-    )
-    return X_class[np.sort(reference_indices)]
+    kernel_matrix = _kernel_matrix(X_class, X_class, kernel, gamma)
+    kernel_mean = kernel_matrix.mean(axis=1)
+    selected = []
+    selected_mask = np.zeros(len(X_class), dtype=bool)
+    accumulated_similarity = np.zeros(len(X_class), dtype=float)
+
+    for step in range(reference_count):
+        scores = kernel_mean - accumulated_similarity / (step + 1)
+        scores[selected_mask] = -np.inf
+        best_position = int(np.argmax(scores))
+        selected.append(best_position)
+        selected_mask[best_position] = True
+        accumulated_similarity += kernel_matrix[:, best_position]
+
+    return X_class[np.array(selected)]
+
+
+def _reference_subset(
+    X_class,
+    max_reference_count,
+    method="all",
+    kernel="rbf",
+    gamma=None,
+):
+    if method == "all" or len(X_class) <= max_reference_count:
+        return X_class
+
+    if method == "kernel_herding":
+        if gamma is None:
+            gamma = 1.0 / X_class.shape[1]
+        return kernel_herd_reference_subset(
+            X_class,
+            max_reference_count,
+            kernel,
+            gamma,
+        )
+    raise ValueError("reference_method must be 'all' or 'kernel_herding'.")
+
+
+def _metadata_has_label(metadata, label_id):
+    if "all_label_ids" not in metadata.columns:
+        return metadata["label_id"].to_numpy() == label_id
+
+    label_token = str(label_id)
+    return metadata["all_label_ids"].fillna("").astype(str).map(
+        lambda value: label_token in value.split("|")
+    ).to_numpy()
 
 
 def greedy_maximize_von_neumann_entropy(
@@ -80,8 +132,17 @@ def greedy_maximize_von_neumann_entropy(
 ):
     selected_indices = []
     selected_candidate_positions = []
-    current_X = X_labeled_class.copy()
-    current_entropy = von_neumann_entropy(current_X, kernel=kernel, gamma=gamma)
+    # These blocks do not change between greedy rounds. Caching them preserves
+    # the objective while avoiding a full kernel rebuild for every candidate.
+    current_kernel = _kernel_matrix(
+        X_labeled_class, X_labeled_class, kernel, gamma
+    )
+    reference_candidate_kernel = _kernel_matrix(
+        X_labeled_class, X_candidates, kernel, gamma
+    )
+    candidate_self_kernel = _kernel_diagonal(X_candidates, kernel)
+    selected_candidate_kernel_rows = []
+    current_entropy = _von_neumann_entropy_from_kernel(current_kernel)
     current_log_probability_sum = 0.0
     current_objective = current_entropy
 
@@ -96,8 +157,23 @@ def greedy_maximize_von_neumann_entropy(
             if position in selected_candidate_positions:
                 continue
 
-            trial_X = np.vstack([current_X, X_candidates[position:position + 1]])
-            trial_entropy = von_neumann_entropy(trial_X, kernel=kernel, gamma=gamma)
+            cross_kernel = reference_candidate_kernel[:, position]
+            if selected_candidate_kernel_rows:
+                cross_kernel = np.concatenate([
+                    cross_kernel,
+                    np.array([
+                        row[position] for row in selected_candidate_kernel_rows
+                    ]),
+                ])
+            trial_kernel = np.empty(
+                (len(current_kernel) + 1, len(current_kernel) + 1),
+                dtype=current_kernel.dtype,
+            )
+            trial_kernel[:-1, :-1] = current_kernel
+            trial_kernel[:-1, -1] = cross_kernel
+            trial_kernel[-1, :-1] = cross_kernel
+            trial_kernel[-1, -1] = candidate_self_kernel[position]
+            trial_entropy = _von_neumann_entropy_from_kernel(trial_kernel)
             log_probability = float(
                 np.log(candidate_positive_probabilities[position] + 1e-12)
             )
@@ -134,7 +210,31 @@ def greedy_maximize_von_neumann_entropy(
                 current_log_probability_sum + best_log_probability
             ),
         })
-        current_X = np.vstack([current_X, X_candidates[best_position:best_position + 1]])
+        chosen_cross_kernel = reference_candidate_kernel[:, best_position]
+        if selected_candidate_kernel_rows:
+            chosen_cross_kernel = np.concatenate([
+                chosen_cross_kernel,
+                np.array([
+                    row[best_position] for row in selected_candidate_kernel_rows
+                ]),
+            ])
+        expanded_kernel = np.empty(
+            (len(current_kernel) + 1, len(current_kernel) + 1),
+            dtype=current_kernel.dtype,
+        )
+        expanded_kernel[:-1, :-1] = current_kernel
+        expanded_kernel[:-1, -1] = chosen_cross_kernel
+        expanded_kernel[-1, :-1] = chosen_cross_kernel
+        expanded_kernel[-1, -1] = candidate_self_kernel[best_position]
+        current_kernel = expanded_kernel
+        selected_candidate_kernel_rows.append(
+            _kernel_matrix(
+                X_candidates[best_position:best_position + 1],
+                X_candidates,
+                kernel,
+                gamma,
+            )[0]
+        )
         current_entropy = best_entropy
         current_log_probability_sum += best_log_probability
         current_objective = best_objective
@@ -153,7 +253,7 @@ def optimize_subset_selection(
     stop_when_objective_decreases=True,
     max_candidate_pool_per_subset=None,
     max_labeled_reference_per_subset=200,
-    random_state=42,
+    reference_method="all",
 ):
     learning_dir = _resolve_path(learning_dir)
     target_dir = _resolve_path(target_dir)
@@ -186,6 +286,7 @@ def optimize_subset_selection(
     labeled_mask = learning_label_ids >= 0
     X_learning = X_learning[labeled_mask]
     learning_label_ids = learning_label_ids[labeled_mask]
+    learning_metadata = learning_metadata.loc[labeled_mask].reset_index(drop=True)
 
     if len(learning_label_ids) == 0:
         raise ValueError("No labeled learning images found for optimization.")
@@ -210,6 +311,7 @@ def optimize_subset_selection(
     print(
         f"Optimization settings: selection_count={selection_count}, "
         f"lambda={probability_lambda}, kernel={kernel}, "
+        f"reference_method={reference_method}, "
         f"stop_when_objective_decreases={stop_when_objective_decreases}"
     )
     if probability_lambda == 0:
@@ -224,7 +326,7 @@ def optimize_subset_selection(
         probability_column = f"{class_name}_positive_probability"
 
         label_id = int(label_id)
-        class_learning_mask = learning_label_ids == label_id
+        class_learning_mask = _metadata_has_label(learning_metadata, label_id)
         if class_learning_mask.sum() == 0:
             print(
                 f"[Optimization {class_number}/{len(optimization_rows)}] "
@@ -256,7 +358,9 @@ def optimize_subset_selection(
         class_reference = _reference_subset(
             X_learning_scaled[class_learning_mask],
             max_labeled_reference_per_subset,
-            random_state + label_id,
+            method=reference_method,
+            kernel=kernel,
+            gamma=gamma,
         )
         base_entropy = von_neumann_entropy(class_reference, kernel=kernel, gamma=gamma)
         print(
@@ -303,6 +407,7 @@ def optimize_subset_selection(
                 "path": metadata_row["path"],
                 "optimization_rank": selected_item["optimization_rank"],
                 "kernel": kernel,
+                "reference_method": reference_method,
                 "stop_when_objective_decreases": stop_when_objective_decreases,
                 "objective": selected_item["objective"],
                 "objective_gain": selected_item["objective_gain"],
@@ -340,6 +445,7 @@ def optimize_subset_selection(
             "candidate_count": int(len(candidate_scores)),
             "selected_count": int(len(selected)),
             "kernel": kernel,
+            "reference_method": reference_method,
             "stop_when_objective_decreases": stop_when_objective_decreases,
             "probability_lambda": probability_lambda,
             "base_von_neumann_entropy": base_entropy,

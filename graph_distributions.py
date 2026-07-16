@@ -32,9 +32,9 @@ def plot_subset_probability_distributions(scores):
     plt.hist(scores["subset_probability"], bins=40, alpha=0.75, label=method)
     if "nce_subset_probability" in scores:
         plt.hist(scores["nce_subset_probability"], bins=40, alpha=0.35, label="NCE")
-    plt.xlabel("NCE positive-membership probability")
+    plt.xlabel("Calibrated positive-membership probability")
     plt.ylabel("Image count")
-    plt.title("NCE Positive-Membership Probability Distribution")
+    plt.title("Calibrated Positive-Membership Probability Distribution")
     plt.legend()
     _save_current("subset_probability_histogram.png")
 
