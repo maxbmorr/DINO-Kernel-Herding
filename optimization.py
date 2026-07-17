@@ -2,6 +2,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from scipy.optimize import brentq
 from sklearn.preprocessing import StandardScaler
 
 import __utils__ as ut
@@ -45,12 +46,11 @@ def _kernel_diagonal(X, kernel):
     raise ValueError("kernel must be 'rbf' or 'cosine'.")
 
 
-def _von_neumann_entropy_from_kernel(kernel_matrix):
-    if len(kernel_matrix) <= 1:
+def _von_neumann_entropy_from_eigenvalues(eigenvalues):
+    if len(eigenvalues) <= 1:
         return 0.0
 
-    density_matrix = kernel_matrix / (np.trace(kernel_matrix) + 1e-12)
-    eigenvalues = np.linalg.eigvalsh(density_matrix)
+    eigenvalues = eigenvalues / (np.sum(eigenvalues) + 1e-12)
     eigenvalues = np.clip(eigenvalues, 1e-12, 1.0)
 
     entropy = -np.sum(eigenvalues * np.log(eigenvalues))
@@ -58,6 +58,129 @@ def _von_neumann_entropy_from_kernel(kernel_matrix):
     if max_entropy <= 0:
         return 0.0
     return float(entropy / max_entropy)
+
+
+def _von_neumann_entropy_from_kernel(kernel_matrix):
+    return _von_neumann_entropy_from_eigenvalues(
+        np.linalg.eigvalsh(kernel_matrix)
+    )
+
+
+def _group_secular_poles(eigenvalues, transformed_cross):
+    scale = max(1.0, float(np.max(np.abs(eigenvalues))))
+    pole_tolerance = 1e-14 * scale
+    weight_tolerance = 1e-28 * scale * scale
+    poles = []
+    weights = []
+    retained_eigenvalues = []
+
+    start = 0
+    while start < len(eigenvalues):
+        end = start + 1
+        while (
+            end < len(eigenvalues)
+            and abs(eigenvalues[end] - eigenvalues[start]) <= pole_tolerance
+        ):
+            end += 1
+
+        pole = float(np.mean(eigenvalues[start:end]))
+        weight = float(np.sum(transformed_cross[start:end] ** 2))
+        multiplicity = end - start
+        if weight <= weight_tolerance:
+            retained_eigenvalues.extend([pole] * multiplicity)
+        else:
+            retained_eigenvalues.extend([pole] * (multiplicity - 1))
+            poles.append(pole)
+            weights.append(weight)
+        start = end
+
+    return (
+        np.asarray(poles, dtype=float),
+        np.asarray(weights, dtype=float),
+        retained_eigenvalues,
+    )
+
+
+def _secular_bordered_eigenvalues(
+    current_eigenvalues,
+    current_eigenvectors,
+    cross_kernel,
+    self_kernel,
+):
+    transformed_cross = current_eigenvectors.T @ cross_kernel
+    poles, weights, retained = _group_secular_poles(
+        current_eigenvalues,
+        transformed_cross,
+    )
+    if len(poles) == 0:
+        return np.sort(np.asarray([*retained, float(self_kernel)]))
+
+    def secular_function(value):
+        return float(
+            self_kernel
+            - value
+            - np.sum(weights / (poles - value))
+        )
+
+    scale = max(
+        1.0,
+        float(np.max(np.abs(poles))),
+        abs(float(self_kernel)),
+        float(np.sqrt(np.sum(weights))),
+    )
+    roots = []
+    lower = min(float(poles[0]), float(self_kernel)) - scale
+    left_of_first = float(np.nextafter(poles[0], -np.inf))
+    while secular_function(lower) * secular_function(left_of_first) > 0:
+        lower -= scale
+        scale *= 2.0
+    roots.append(
+        brentq(
+            secular_function,
+            lower,
+            left_of_first,
+            xtol=1e-13,
+            rtol=1e-13,
+            maxiter=100,
+        )
+    )
+
+    for left_pole, right_pole in zip(poles[:-1], poles[1:]):
+        left = float(np.nextafter(left_pole, np.inf))
+        right = float(np.nextafter(right_pole, -np.inf))
+        roots.append(
+            brentq(
+                secular_function,
+                left,
+                right,
+                xtol=1e-13,
+                rtol=1e-13,
+                maxiter=100,
+            )
+        )
+
+    right_of_last = float(np.nextafter(poles[-1], np.inf))
+    upper = max(float(poles[-1]), float(self_kernel)) + scale
+    while secular_function(right_of_last) * secular_function(upper) > 0:
+        upper += scale
+        scale *= 2.0
+    roots.append(
+        brentq(
+            secular_function,
+            right_of_last,
+            upper,
+            xtol=1e-13,
+            rtol=1e-13,
+            maxiter=100,
+        )
+    )
+
+    eigenvalues = np.sort(np.asarray([*retained, *roots], dtype=float))
+    if len(eigenvalues) != len(current_eigenvalues) + 1:
+        raise ValueError("Secular update returned the wrong eigenvalue count.")
+    if not np.all(np.isfinite(eigenvalues)):
+        raise ValueError("Secular update returned non-finite eigenvalues.")
+    return eigenvalues
 
 
 def von_neumann_entropy(X, kernel="rbf", gamma=None):
@@ -129,7 +252,13 @@ def greedy_maximize_von_neumann_entropy(
     gamma,
     probability_lambda=0.01,
     stop_when_objective_decreases=True,
+    eigenvalue_method="direct",
 ):
+    if eigenvalue_method not in {"direct", "secular"}:
+        raise ValueError("eigenvalue_method must be 'direct' or 'secular'.")
+
+    X_labeled_class = np.asarray(X_labeled_class, dtype=np.float64)
+    X_candidates = np.asarray(X_candidates, dtype=np.float64)
     selected_indices = []
     selected_candidate_positions = []
     # These blocks do not change between greedy rounds. Caching them preserves
@@ -147,6 +276,10 @@ def greedy_maximize_von_neumann_entropy(
     current_objective = current_entropy
 
     for rank in range(selection_count):
+        if eigenvalue_method == "secular":
+            current_eigenvalues, current_eigenvectors = np.linalg.eigh(
+                current_kernel
+            )
         best_position = None
         best_objective = -np.inf
         best_entropy = -np.inf
@@ -165,15 +298,45 @@ def greedy_maximize_von_neumann_entropy(
                         row[position] for row in selected_candidate_kernel_rows
                     ]),
                 ])
-            trial_kernel = np.empty(
-                (len(current_kernel) + 1, len(current_kernel) + 1),
-                dtype=current_kernel.dtype,
-            )
-            trial_kernel[:-1, :-1] = current_kernel
-            trial_kernel[:-1, -1] = cross_kernel
-            trial_kernel[-1, :-1] = cross_kernel
-            trial_kernel[-1, -1] = candidate_self_kernel[position]
-            trial_entropy = _von_neumann_entropy_from_kernel(trial_kernel)
+            if eigenvalue_method == "secular":
+                try:
+                    trial_eigenvalues = _secular_bordered_eigenvalues(
+                        current_eigenvalues,
+                        current_eigenvectors,
+                        cross_kernel,
+                        candidate_self_kernel[position],
+                    )
+                    trial_entropy = _von_neumann_entropy_from_eigenvalues(
+                        trial_eigenvalues
+                    )
+                except (
+                    ValueError,
+                    FloatingPointError,
+                    OverflowError,
+                    ZeroDivisionError,
+                    np.linalg.LinAlgError,
+                ):
+                    trial_kernel = np.empty(
+                        (len(current_kernel) + 1, len(current_kernel) + 1),
+                        dtype=current_kernel.dtype,
+                    )
+                    trial_kernel[:-1, :-1] = current_kernel
+                    trial_kernel[:-1, -1] = cross_kernel
+                    trial_kernel[-1, :-1] = cross_kernel
+                    trial_kernel[-1, -1] = candidate_self_kernel[position]
+                    trial_entropy = _von_neumann_entropy_from_kernel(
+                        trial_kernel
+                    )
+            else:
+                trial_kernel = np.empty(
+                    (len(current_kernel) + 1, len(current_kernel) + 1),
+                    dtype=current_kernel.dtype,
+                )
+                trial_kernel[:-1, :-1] = current_kernel
+                trial_kernel[:-1, -1] = cross_kernel
+                trial_kernel[-1, :-1] = cross_kernel
+                trial_kernel[-1, -1] = candidate_self_kernel[position]
+                trial_entropy = _von_neumann_entropy_from_kernel(trial_kernel)
             log_probability = float(
                 np.log(candidate_positive_probabilities[position] + 1e-12)
             )
@@ -243,14 +406,15 @@ def greedy_maximize_von_neumann_entropy(
 
 
 def optimize_subset_selection(
-    learning_dir="saved_vectors/learning",
-    target_dir="saved_vectors/testing",
+    learning_dir="saved_vectors/train",
+    target_dir="saved_vectors/retrain",
     probability_scores_path=None,
     probability_matrix_path=None,
     selection_count=4,
     probability_lambda=0.01,
     kernel="rbf",
     stop_when_objective_decreases=True,
+    eigenvalue_method="direct",
     max_candidate_pool_per_subset=None,
     max_labeled_reference_per_subset=200,
     reference_method="all",
@@ -312,6 +476,7 @@ def optimize_subset_selection(
         f"Optimization settings: selection_count={selection_count}, "
         f"lambda={probability_lambda}, kernel={kernel}, "
         f"reference_method={reference_method}, "
+        f"eigenvalue_method={eigenvalue_method}, "
         f"stop_when_objective_decreases={stop_when_objective_decreases}"
     )
     if probability_lambda == 0:
@@ -383,6 +548,7 @@ def optimize_subset_selection(
             gamma=gamma,
             probability_lambda=probability_lambda,
             stop_when_objective_decreases=stop_when_objective_decreases,
+            eigenvalue_method=eigenvalue_method,
         )
         print(
             f"[Optimization {class_number}/{len(optimization_rows)}] "
@@ -408,6 +574,7 @@ def optimize_subset_selection(
                 "optimization_rank": selected_item["optimization_rank"],
                 "kernel": kernel,
                 "reference_method": reference_method,
+                "eigenvalue_method": eigenvalue_method,
                 "stop_when_objective_decreases": stop_when_objective_decreases,
                 "objective": selected_item["objective"],
                 "objective_gain": selected_item["objective_gain"],
@@ -446,6 +613,7 @@ def optimize_subset_selection(
             "selected_count": int(len(selected)),
             "kernel": kernel,
             "reference_method": reference_method,
+            "eigenvalue_method": eigenvalue_method,
             "stop_when_objective_decreases": stop_when_objective_decreases,
             "probability_lambda": probability_lambda,
             "base_von_neumann_entropy": base_entropy,

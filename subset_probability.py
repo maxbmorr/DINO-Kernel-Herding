@@ -110,6 +110,36 @@ def _fit_tuned_classifier(X, y, random_state):
     return search.best_estimator_, float(search.best_params_["C"])
 
 
+def _refit_with_hard_negatives(
+    classifier,
+    X,
+    y,
+    hard_negative_fraction,
+    hard_negative_weight,
+):
+    negative_indices = np.flatnonzero(y == 0)
+    negative_scores = classifier.decision_function(X[negative_indices])
+    hard_negative_count = max(
+        1,
+        int(np.ceil(len(negative_indices) * hard_negative_fraction)),
+    )
+    hardest_positions = np.argpartition(
+        negative_scores,
+        -hard_negative_count,
+    )[-hard_negative_count:]
+    hard_negative_indices = negative_indices[hardest_positions]
+
+    sample_weight = np.ones(len(y), dtype=float)
+    sample_weight[hard_negative_indices] = hard_negative_weight
+    refit_classifier = LogisticRegression(
+        C=float(classifier.C),
+        max_iter=2000,
+        class_weight="balanced",
+    )
+    refit_classifier.fit(X, y, sample_weight=sample_weight)
+    return refit_classifier, hard_negative_count
+
+
 def fit_calibrated_classifier(
     X,
     y,
@@ -117,9 +147,16 @@ def fit_calibrated_classifier(
     random_state=42,
     tune_regularization=True,
     fixed_c=1.0,
+    use_hard_negative_mining=True,
+    hard_negative_fraction=0.1,
+    hard_negative_weight=3.0,
 ):
     if fixed_c <= 0:
         raise ValueError("fixed_c must be positive.")
+    if not 0 < hard_negative_fraction <= 1:
+        raise ValueError("hard_negative_fraction must be in (0, 1].")
+    if hard_negative_weight < 1:
+        raise ValueError("hard_negative_weight must be at least 1.")
 
     positive_count = int(y.sum())
     negative_count = int((y == 0).sum())
@@ -137,6 +174,7 @@ def fit_calibrated_classifier(
     )
     out_of_fold_scores = np.empty(len(y), dtype=float)
     outer_fold_c_values = []
+    outer_hard_negative_counts = []
     for fold_number, (fit_indices, fold_indices) in enumerate(
         splitter.split(X, y),
         start=1,
@@ -155,7 +193,18 @@ def fit_calibrated_classifier(
                 class_weight="balanced",
             )
             fold_classifier.fit(X[fit_indices], y[fit_indices])
+        if use_hard_negative_mining:
+            fold_classifier, hard_negative_count = _refit_with_hard_negatives(
+                fold_classifier,
+                X[fit_indices],
+                y[fit_indices],
+                hard_negative_fraction,
+                hard_negative_weight,
+            )
+        else:
+            hard_negative_count = 0
         outer_fold_c_values.append(fold_c)
+        outer_hard_negative_counts.append(hard_negative_count)
         out_of_fold_scores[fold_indices] = fold_classifier.decision_function(
             X[fold_indices]
         )
@@ -188,6 +237,17 @@ def fit_calibrated_classifier(
         regularization_selection = "fixed"
         regularization_c_candidates = f"{selected_c:g}"
 
+    if use_hard_negative_mining:
+        classifier, final_hard_negative_count = _refit_with_hard_negatives(
+            classifier,
+            X,
+            y,
+            hard_negative_fraction,
+            hard_negative_weight,
+        )
+    else:
+        final_hard_negative_count = 0
+
     model = CalibratedSubsetClassifier(classifier, calibrator, threshold)
     metrics = {
         "positive_count": positive_count,
@@ -203,6 +263,13 @@ def fit_calibrated_classifier(
             f"{value:g}" for value in outer_fold_c_values
         ),
         "selected_c": selected_c,
+        "hard_negative_mining": bool(use_hard_negative_mining),
+        "hard_negative_fraction": hard_negative_fraction,
+        "hard_negative_weight": hard_negative_weight,
+        "outer_hard_negative_counts": "|".join(
+            str(value) for value in outer_hard_negative_counts
+        ),
+        "final_hard_negative_count": final_hard_negative_count,
         "threshold": threshold,
         "brier_score": brier_score_loss(y, calibrated),
         "expected_calibration_error": _expected_calibration_error(
@@ -214,13 +281,48 @@ def fit_calibrated_classifier(
 
 
 def fit_subset_probability_model(
-    learning_dir="saved_vectors/learning",
+    learning_dir="saved_vectors/train",
     min_class_samples=6,
     target_precision=0.8,
     tune_regularization=True,
     fixed_c=1.0,
+    use_hard_negative_mining=True,
+    hard_negative_fraction=0.1,
+    hard_negative_weight=3.0,
 ):
     X_train, _, _, _, metadata, class_mapping = ut.load_DINO_vectors(learning_dir)
+    return fit_subset_probability_model_from_data(
+        X_train,
+        metadata,
+        class_mapping,
+        min_class_samples=min_class_samples,
+        target_precision=target_precision,
+        tune_regularization=tune_regularization,
+        fixed_c=fixed_c,
+        use_hard_negative_mining=use_hard_negative_mining,
+        hard_negative_fraction=hard_negative_fraction,
+        hard_negative_weight=hard_negative_weight,
+    )
+
+
+def fit_subset_probability_model_from_data(
+    X_train,
+    metadata,
+    class_mapping,
+    min_class_samples=6,
+    target_precision=0.8,
+    tune_regularization=True,
+    fixed_c=1.0,
+    use_hard_negative_mining=True,
+    hard_negative_fraction=0.1,
+    hard_negative_weight=3.0,
+):
+    X_train = np.asarray(X_train)
+    metadata = metadata.reset_index(drop=True)
+    class_mapping = class_mapping.reset_index(drop=True)
+    if len(X_train) != len(metadata):
+        raise ValueError("X_train and metadata must have the same row count.")
+
     scaler = StandardScaler()
     X_train_scaled = scaler.fit_transform(X_train)
 
@@ -255,6 +357,9 @@ def fit_subset_probability_model(
             random_state=42 + label_id,
             tune_regularization=tune_regularization,
             fixed_c=fixed_c,
+            use_hard_negative_mining=use_hard_negative_mining,
+            hard_negative_fraction=hard_negative_fraction,
+            hard_negative_weight=hard_negative_weight,
         )
         classifiers_by_class[label_id] = classifier
         class_ids.append(label_id)
@@ -366,17 +471,23 @@ def evaluate_probabilities(model, probability_matrix, metadata):
 
 
 def score_directory(
-    learning_dir="saved_vectors/learning",
-    target_dir="saved_vectors/testing",
+    learning_dir="saved_vectors/train",
+    target_dir="saved_vectors/retrain",
     output_name="subset_probability_scores.csv",
     matrix_output_name="subset_probability_matrix.csv",
     tune_regularization=True,
     fixed_c=1.0,
+    use_hard_negative_mining=True,
+    hard_negative_fraction=0.1,
+    hard_negative_weight=3.0,
 ):
     model = fit_subset_probability_model(
         learning_dir=learning_dir,
         tune_regularization=tune_regularization,
         fixed_c=fixed_c,
+        use_hard_negative_mining=use_hard_negative_mining,
+        hard_negative_fraction=hard_negative_fraction,
+        hard_negative_weight=hard_negative_weight,
     )
     X_target, _, _, _, metadata, _ = ut.load_DINO_vectors(target_dir)
     scores, probability_matrix, raw_probability_matrix = score_embeddings(

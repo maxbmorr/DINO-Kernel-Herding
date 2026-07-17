@@ -13,7 +13,7 @@ def _filter_labeled_rows(X, label_ids, metadata):
     return X[labeled_mask], label_ids[labeled_mask], metadata[labeled_mask]
 
 
-def train_classifier(input_dir="saved_vectors/learning"):
+def train_classifier(input_dir="saved_vectors/train"):
     X, label_ids, label_names, paths, metadata, class_mapping = ut.load_DINO_vectors(input_dir)
     X, label_ids, metadata = _filter_labeled_rows(X, label_ids, metadata)
 
@@ -37,7 +37,7 @@ def train_classifier(input_dir="saved_vectors/learning"):
 def evaluate_classifier(
     model,
     class_mapping,
-    input_dir="saved_vectors/testing",
+    input_dir="saved_vectors/test",
 ):
     X, label_ids, label_names, paths, metadata, _ = ut.load_DINO_vectors(input_dir)
     X, label_ids, metadata = _filter_labeled_rows(X, label_ids, metadata)
@@ -82,8 +82,8 @@ def evaluate_classifier(
 
 
 def train_and_evaluate(
-    learning_dir="saved_vectors/learning",
-    testing_dir="saved_vectors/testing",
+    learning_dir="saved_vectors/train",
+    testing_dir="saved_vectors/test",
 ):
     model, class_mapping = train_classifier(learning_dir)
     return evaluate_classifier(model, class_mapping, testing_dir)

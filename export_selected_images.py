@@ -7,7 +7,7 @@ import pandas as pd
 import __utils__ as ut
 
 
-SELECTION_CSV = ut.PROJECT_ROOT / "saved_vectors" / "testing" / "optimization_selection.csv"
+SELECTION_CSV = ut.PROJECT_ROOT / "saved_vectors" / "retrain" / "optimization_selection.csv"
 OUTPUT_DIR = ut.PROJECT_ROOT / "organized_selected_images"
 
 

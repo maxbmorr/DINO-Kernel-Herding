@@ -117,7 +117,7 @@ def find_coco_annotation(dataset_path):
     return None
 
 def load_DINO(): #used in the primary file to load DINO for use
-    device = "cuda" if torch.cuda.is_available() else "cpu" #forces use of GPU if there is a GPU otherwise it uses CPU
+    device = "cpu"
     model = torch.hub.load("facebookresearch/dinov2", "dinov2_vits14")
     model = model.to(device)
     model.eval()

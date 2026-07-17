@@ -5,12 +5,12 @@ For CNiEL research 2026 for the Dr. Austin Brockmeier.  This is my primary proje
 
 The current pipeline starts in `main.py`.
 
-The active learning classifier is a DINO-embedding classifier in `embedding_classifier.py`. It learns only from labeled images, using the labels saved in `saved_vectors/learning/labels.npy`, then tests on `saved_vectors/testing/labels.npy`.
+The active learning classifier is a DINO-embedding classifier in `embedding_classifier.py`. It learns only from labeled images in `saved_vectors/train/`, while `saved_vectors/test/` remains the final test fold.
 
 The DINO vector pipeline is still available, but it is behind flags in `main.py`:
 
 - `CREATE_DINO_DATASET`: creates DINO feature vectors from COCO or class-folder images.
-- `SPLIT_DINO_DATASET`: splits saved DINO vectors into learning/testing folders.
+- `SPLIT_DINO_DATASET`: creates stratified train/retrain/test vector folders.
 - `RUN_EMBEDDING_CLASSIFIER`: trains and tests a classifier using labeled DINO vectors.
 - `RUN_SUBSET_PROBABILITY`: estimates calibrated multi-label membership probability for each target image and class/subset.
 - `RUN_OPTIMIZATION`: selects target images using a von Neumann entropy objective with a log-probability term.
@@ -122,16 +122,26 @@ It uses DINO vectors that were already created from labeled images. The usual fl
 python main.py
 ```
 
-With the current flags in `main.py`, this trains on:
+The stratified split first reserves 20% for final testing, then divides the
+remaining data evenly between train and retrain. For ordinary classes this is
+approximately a 40%/40%/20% split:
 
 ```text
-saved_vectors/learning/
+saved_vectors/train/    original labeled training data
+saved_vectors/retrain/  acquisition pool used by subset selection
+saved_vectors/test/     untouched final test data
+```
+
+With the current flags in `main.py`, the embedding classifier trains on:
+
+```text
+saved_vectors/train/
 ```
 
 and tests on:
 
 ```text
-saved_vectors/testing/
+saved_vectors/test/
 ```
 
 The classifier ignores unlabeled rows where `label_id` is `-1`. If all rows are unlabeled, it stops with an error because there is nothing labeled to learn from.
@@ -156,12 +166,14 @@ The model uses all COCO labels in `all_label_ids`, not only the primary label. A
 For each class, the pipeline:
 
 - creates a natural one-vs-rest target using all annotated objects
-- divides the learning set into up to five stratified folds
+- divides the train set into up to five stratified folds
 - tunes logistic regularization `C` inside each training fold using an inner stratified cross-validation and log loss
-- trains the tuned class-balanced logistic regression on the outer training folds and predicts the held-out fold
+- trains an initial class-balanced logistic regression on each outer training fold
+- finds the true negatives with the highest class scores, increases their sample weight, and refits the fold classifier
+- predicts the untouched held-out fold with the hard-negative-refit classifier
 - repeats until every learning image has one out-of-fold decision score
 - fits a sigmoid calibrator on all out-of-fold scores at the natural class frequency
-- tunes `C` again and refits the final logistic classifier on the complete learning set
+- tunes `C` again, mines hard negatives, and refits the final logistic classifier on the complete train set
 - derives a class-specific threshold targeting 80% precision
 
 The regularization search grid is:
@@ -190,18 +202,37 @@ mode therefore preserves probability calibration while avoiding the inner
 regularization searches. Changing this switch affects probability estimates,
 not the downstream entropy optimization formula.
 
+Hard-negative mining is configured in `main.py`:
+
+```python
+USE_HARD_NEGATIVE_MINING = True
+HARD_NEGATIVE_FRACTION = 0.1
+HARD_NEGATIVE_WEIGHT = 3.0
+```
+
+For each class, `HARD_NEGATIVE_FRACTION` selects that fraction of true
+negative training images with the largest initial decision scores.
+`HARD_NEGATIVE_WEIGHT` is their sample weight during the refit. Mining runs
+independently inside every outer training fold, so the held-out fold used for
+calibration is never inspected while choosing hard negatives. The same
+procedure is applied to the final classifier using the complete train set.
+Disabling mining restores the previous classifier training.
+
+Hard-negative mining changes the probability estimates, but not the entropy
+objective, positivity constraint, candidate set, or greedy subset optimizer.
+
 Classes need at least six positive and six negative learning examples. Classes below that minimum are skipped because their probabilities cannot be calibrated reliably.
 
 The classifiers use DINO embeddings from:
 
 ```text
-saved_vectors/learning/
+saved_vectors/train/
 ```
 
 Then the target images from:
 
 ```text
-saved_vectors/testing/
+saved_vectors/retrain/
 ```
 
 are scored against every calibrated class/subset model. The probability used by optimization is:
@@ -215,12 +246,67 @@ The result is not normalized across classes because COCO images can contain mult
 Running `main.py` with `RUN_SUBSET_PROBABILITY = True` writes:
 
 ```text
-saved_vectors/testing/subset_probability_scores.csv
-saved_vectors/testing/subset_probability_matrix.csv
-saved_vectors/testing/subset_probability_raw_matrix.csv
-saved_vectors/testing/subset_probability_calibration_metrics.csv
-saved_vectors/testing/subset_probability_evaluation_metrics.csv
+saved_vectors/retrain/subset_probability_scores.csv
+saved_vectors/retrain/subset_probability_matrix.csv
+saved_vectors/retrain/subset_probability_raw_matrix.csv
+saved_vectors/retrain/subset_probability_calibration_metrics.csv
+saved_vectors/retrain/subset_probability_evaluation_metrics.csv
 ```
+
+## Baseline and Augmented Calibration
+
+After subset optimization, `dual_model_calibration.py` creates two separately
+calibrated probability models:
+
+```text
+M_0 = original labeled train images
+M_1 = original labeled train images + newly labeled selected retrain images
+```
+
+Only paths present in `optimization_selection.csv` are added to `M_1`. A
+selected image is added once even when it was selected for multiple subsets.
+Its COCO multi-label metadata supplies the newly revealed labels. The module
+raises an error if a selected path does not belong to the current retrain
+split, which prevents an old selection file from being combined with a new
+random split.
+
+Both models independently fit their scaler, fold-safe hard-negative models,
+out-of-fold sigmoid calibrators, and class thresholds. This stage saves the
+models and calibration records but does not score or compare them.
+
+This calibration stage always runs from `main.py` after the optional subset
+optimization stage. It does not have an enable/disable switch.
+
+Outputs are written to:
+
+```text
+saved_models/calibrated/M_0.joblib
+saved_models/calibrated/M_0_calibration_metrics.csv
+saved_models/calibrated/M_0_training_manifest.csv
+saved_models/calibrated/M_1.joblib
+saved_models/calibrated/M_1_calibration_metrics.csv
+saved_models/calibrated/M_1_training_manifest.csv
+```
+
+After saving the models, `main.py` also classifies every image in the untouched
+test split with both calibrations and organizes copies into:
+
+```text
+_organized_calibrated_images/
+  M_0/
+    person/
+    dog/
+    ...
+  M_1/
+    person/
+    dog/
+    ...
+```
+
+Each model folder contains a `prediction_manifest.csv` recording only the
+predicted folder assignment. This export reads test embeddings and image paths,
+but does not use true test labels or calculate accuracy, calibration, or model
+comparison metrics.
 
 Important columns in `subset_probability_scores.csv`:
 
@@ -246,9 +332,11 @@ The calibration metrics CSV reports the calibration method, fold count,
 candidate and selected `C` values, per-outer-fold `C` values, out-of-fold sample
 counts, threshold, Brier score, expected calibration error, and average
 precision. The evaluation metrics CSV reports those metrics plus precision and
-recall on the independent testing split. Every learning image is held out
-exactly once for calibration scoring; testing images are never used to fit the
-classifier, regularization search, or calibrator.
+recall on the retrain acquisition pool using its known COCO labels for
+auditing. It is not the untouched final test evaluation. Every train image is
+held out exactly once for calibration scoring. Retrain images are not used to fit
+`M_0`; only selected retrain images with newly revealed labels are added to
+`M_1`. Final test images are not used by either model during fitting.
 
 This does not draw boxes or detect multiple objects. It answers: given this image's DINO embedding, how positive/subset-like is it for each learned subset?
 
@@ -259,21 +347,21 @@ The optimization code is in `optimization.py`.
 It uses:
 
 ```text
-saved_vectors/learning/
-saved_vectors/testing/subset_probability_scores.csv
-saved_vectors/testing/subset_probability_matrix.csv
+saved_vectors/train/
+saved_vectors/retrain/subset_probability_scores.csv
+saved_vectors/retrain/subset_probability_matrix.csv
 ```
 
 For each learned subset/class, it:
 
-- takes every learning image containing that class in `all_label_ids` as the reference set
-- considers every target/testing image for that subset
+- takes every train image containing that class in `all_label_ids` as the reference set
+- considers every retrain image for that subset
 - greedily selects images that maximize normalized von Neumann entropy of the kernel matrix plus a log-probability term
 
 The candidate set and objective are unchanged between rounds. For efficiency,
 the implementation caches the reference-to-reference and
 reference-to-candidate kernel blocks, then computes only the kernel rows and
-entropy values that depend on the current greedy selections. Every testing
+entropy values that depend on the current greedy selections. Every retrain
 image is still eligible for every subset.
 
 In plain terms, it asks:
@@ -313,24 +401,40 @@ OPTIMIZATION_KERNEL = "rbf"
 OPTIMIZATION_STOP_WHEN_OBJECTIVE_DECREASES = True
 USE_KERNEL_HERDED_REFERENCES = True
 KERNEL_HERDED_REFERENCE_COUNT = 50
+USE_SECULAR_EIGENVALUE_UPDATES = False
 ```
 
 When `USE_KERNEL_HERDED_REFERENCES` is enabled, known learning labels first
 define each class subset. Kernel herding then compresses that subset to 50
 representative DINO embeddings by greedily matching its kernel mean. All von
 Neumann entropy and candidate calculations use this herded reference coreset.
-True testing labels are not used.
+True retrain labels are not used during selection.
 
 Set `USE_KERNEL_HERDED_REFERENCES = False` to use every labeled embedding in
 each class. There is no random reference sampling or cap in this mode. Classes
 smaller than `KERNEL_HERDED_REFERENCE_COUNT` already use every labeled embedding
 when herding is enabled.
 
+`USE_SECULAR_EIGENVALUE_UPDATES` controls how candidate kernel eigenvalues are
+computed:
+
+```text
+False -> direct LAPACK eigvalsh
+True  -> arrowhead secular-equation update with direct fallback
+```
+
+The secular method diagonalizes the current kernel once per greedy round and
+solves the bordered arrowhead eigenproblem for each candidate. It has better
+asymptotic complexity, but the current SciPy/Python root solver is slower than
+optimized LAPACK at the project's usual 30-50 reference sizes. It therefore
+defaults to `False`. Both paths use the same objective and produce equivalent
+selections within numerical tolerance.
+
 Running `main.py` with `RUN_OPTIMIZATION = True` writes:
 
 ```text
-saved_vectors/testing/optimization_selection.csv
-saved_vectors/testing/optimization_summary.csv
+saved_vectors/retrain/optimization_selection.csv
+saved_vectors/retrain/optimization_summary.csv
 ```
 
 Important columns in `optimization_selection.csv`:
@@ -339,6 +443,7 @@ Important columns in `optimization_selection.csv`:
 - `path`: selected target image
 - `optimization_rank`: greedy selection order inside that subset
 - `kernel`: kernel used for the von Neumann entropy calculation
+- `eigenvalue_method`: `direct` or `secular`
 - `stop_when_objective_decreases`: whether selection requires positive combined objective gain
 - `objective`: value of `H + lambda * sum(log(P_hat_+(x)))` after this image is selected
 - `objective_gain`: change in the objective from selecting this image
@@ -400,6 +505,7 @@ SURPRISAL_LAMBDAS = [0.0, 0.001, 0.005, 0.01, 0.025]
 SELECTION_COUNT = 4
 KERNEL = "rbf"
 USE_KERNEL_HERDED_REFERENCES = True
+USE_SECULAR_EIGENVALUE_UPDATES = False
 MAX_LABELED_REFERENCE_PER_SUBSET = 30
 ```
 

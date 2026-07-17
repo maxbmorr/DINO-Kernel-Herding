@@ -132,53 +132,83 @@ def save_vector_split(output_dir, X, label_ids, metadata, class_mapping):
     metadata.to_csv(output_dir / "metadata.csv", index=False)
     class_mapping.to_csv(output_dir / "class_mapping.csv", index=False)
 
-def split_DINO_vectors(input_dir="saved_vectors", test_size=0.2, random_state=42):
-    X, label_ids, _, _, metadata, class_mapping = load_DINO_vectors(input_dir)
-    rng = np.random.default_rng(random_state)
+def _three_way_stratified_indices(label_ids, test_size, random_state):
+    if not 0 < test_size < 1:
+        raise ValueError("test_size must be between 0 and 1.")
 
-    learning_indices = []
-    testing_indices = []
+    rng = np.random.default_rng(random_state)
+    train_indices = []
+    retrain_indices = []
+    test_indices = []
 
     for label_id in np.unique(label_ids):
         class_indices = np.where(label_ids == label_id)[0]
         rng.shuffle(class_indices)
 
         if len(class_indices) == 1:
-            learning_indices.extend(class_indices)
+            train_indices.extend(class_indices)
+            continue
+
+        if len(class_indices) == 2:
+            train_indices.append(class_indices[0])
+            retrain_indices.append(class_indices[1])
             continue
 
         test_count = max(1, int(round(len(class_indices) * test_size)))
-        test_count = min(test_count, len(class_indices) - 1)
+        test_count = min(test_count, len(class_indices) - 2)
+        non_test_indices = class_indices[test_count:]
+        train_count = len(non_test_indices) // 2
 
-        testing_indices.extend(class_indices[:test_count])
-        learning_indices.extend(class_indices[test_count:])
+        test_indices.extend(class_indices[:test_count])
+        train_indices.extend(non_test_indices[:train_count])
+        retrain_indices.extend(non_test_indices[train_count:])
 
-    learning_indices = np.array(sorted(learning_indices))
-    testing_indices = np.array(sorted(testing_indices))
+    train_indices = np.array(sorted(train_indices))
+    retrain_indices = np.array(sorted(retrain_indices))
+    test_indices = np.array(sorted(test_indices))
+    return train_indices, retrain_indices, test_indices
+
+
+def split_DINO_vectors(input_dir="saved_vectors", test_size=0.2, random_state=42):
+    X, label_ids, _, _, metadata, class_mapping = load_DINO_vectors(input_dir)
+    train_indices, retrain_indices, test_indices = _three_way_stratified_indices(
+        label_ids,
+        test_size,
+        random_state,
+    )
 
     input_dir = Path(input_dir)
     if not input_dir.is_absolute():
         input_dir = PROJECT_ROOT / input_dir
 
-    learning_dir = input_dir / "learning"
-    testing_dir = input_dir / "testing"
+    train_dir = input_dir / "train"
+    retrain_dir = input_dir / "retrain"
+    test_dir = input_dir / "test"
 
     save_vector_split(
-        learning_dir,
-        X[learning_indices],
-        label_ids[learning_indices],
-        metadata.iloc[learning_indices].reset_index(drop=True),
+        train_dir,
+        X[train_indices],
+        label_ids[train_indices],
+        metadata.iloc[train_indices].reset_index(drop=True),
         class_mapping
     )
     save_vector_split(
-        testing_dir,
-        X[testing_indices],
-        label_ids[testing_indices],
-        metadata.iloc[testing_indices].reset_index(drop=True),
+        retrain_dir,
+        X[retrain_indices],
+        label_ids[retrain_indices],
+        metadata.iloc[retrain_indices].reset_index(drop=True),
+        class_mapping
+    )
+    save_vector_split(
+        test_dir,
+        X[test_indices],
+        label_ids[test_indices],
+        metadata.iloc[test_indices].reset_index(drop=True),
         class_mapping
     )
 
-    print(f"Learning split: {len(learning_indices)} images -> {learning_dir}")
-    print(f"Testing split: {len(testing_indices)} images -> {testing_dir}")
+    print(f"Train split: {len(train_indices)} images -> {train_dir}")
+    print(f"Retrain split: {len(retrain_indices)} images -> {retrain_dir}")
+    print(f"Test split: {len(test_indices)} images -> {test_dir}")
 
-    return learning_indices, testing_indices
+    return train_indices, retrain_indices, test_indices

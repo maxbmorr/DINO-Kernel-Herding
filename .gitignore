@@ -9,6 +9,10 @@ saved_vectors/
 training_data_no_bg/
 distribution_graphs/
 organized_selected_images/
+_organized_calibrated_images/
 _surprisal_tradeoff_evaluation/
+saved_models/
 
 *.zip
+~$*.docx
+~WRL*.tmp

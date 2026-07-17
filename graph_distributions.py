@@ -7,7 +7,7 @@ import __utils__ as ut
 
 
 OUTPUT_DIR = ut.PROJECT_ROOT / "distribution_graphs"
-TARGET_DIR = ut.PROJECT_ROOT / "saved_vectors" / "testing"
+TARGET_DIR = ut.PROJECT_ROOT / "saved_vectors" / "retrain"
 
 
 def _load_csv(name):

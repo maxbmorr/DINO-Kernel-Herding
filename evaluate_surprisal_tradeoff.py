@@ -11,8 +11,8 @@ import __utils__ as ut
 import optimization as opt
 
 
-LEARNING_DIR = ut.PROJECT_ROOT / "saved_vectors" / "learning"
-TARGET_DIR = ut.PROJECT_ROOT / "saved_vectors" / "testing"
+LEARNING_DIR = ut.PROJECT_ROOT / "saved_vectors" / "train"
+TARGET_DIR = ut.PROJECT_ROOT / "saved_vectors" / "retrain"
 PROBABILITY_SCORES_PATH = TARGET_DIR / "subset_probability_scores.csv"
 PROBABILITY_MATRIX_PATH = TARGET_DIR / "subset_probability_matrix.csv"
 OUTPUT_DIR = ut.PROJECT_ROOT / "_surprisal_tradeoff_evaluation"
@@ -24,6 +24,7 @@ SELECTION_COUNT = 4
 KERNEL = "rbf"
 STOP_WHEN_OBJECTIVE_DECREASES = True
 USE_KERNEL_HERDED_REFERENCES = True
+USE_SECULAR_EIGENVALUE_UPDATES = False
 MAX_LABELED_REFERENCE_PER_SUBSET = 30
 CONTACT_SHEET_THUMB_SIZE = (220, 160)
 
@@ -193,6 +194,9 @@ def _evaluate_one_class(inputs, class_row, surprisal_lambda):
         gamma=inputs["gamma"],
         probability_lambda=surprisal_lambda,
         stop_when_objective_decreases=STOP_WHEN_OBJECTIVE_DECREASES,
+        eigenvalue_method=(
+            "secular" if USE_SECULAR_EIGENVALUE_UPDATES else "direct"
+        ),
     )
 
     rows = []
@@ -214,6 +218,9 @@ def _evaluate_one_class(inputs, class_row, surprisal_lambda):
             "kernel": KERNEL,
             "reference_method": (
                 "kernel_herding" if USE_KERNEL_HERDED_REFERENCES else "all"
+            ),
+            "eigenvalue_method": (
+                "secular" if USE_SECULAR_EIGENVALUE_UPDATES else "direct"
             ),
             "stop_when_objective_decreases": STOP_WHEN_OBJECTIVE_DECREASES,
             "objective": selected_item["objective"],
