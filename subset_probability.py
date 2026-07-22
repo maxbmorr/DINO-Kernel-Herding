@@ -80,7 +80,7 @@ def _precision_threshold(y_true, probabilities, target_precision):
     return float(thresholds[np.argmax(f1)])
 
 
-def _fit_tuned_classifier(X, y, random_state):
+def _fit_tuned_classifier(X, y, random_state, sample_weight=None):
     positive_count = int(y.sum())
     negative_count = int((y == 0).sum())
     inner_fold_count = min(3, positive_count, negative_count)
@@ -106,7 +106,7 @@ def _fit_tuned_classifier(X, y, random_state):
         refit=True,
         n_jobs=1,
     )
-    search.fit(X, y)
+    search.fit(X, y, sample_weight=sample_weight)
     return search.best_estimator_, float(search.best_params_["C"])
 
 
@@ -147,9 +147,10 @@ def fit_calibrated_classifier(
     random_state=42,
     tune_regularization=True,
     fixed_c=1.0,
-    use_hard_negative_mining=True,
+    use_hard_negative_mining=False,
     hard_negative_fraction=0.1,
     hard_negative_weight=3.0,
+    sample_weight=None,
 ):
     if fixed_c <= 0:
         raise ValueError("fixed_c must be positive.")
@@ -173,6 +174,12 @@ def fit_calibrated_classifier(
         random_state=random_state,
     )
     out_of_fold_scores = np.empty(len(y), dtype=float)
+    if sample_weight is None:
+        sample_weight = np.ones(len(y), dtype=float)
+    else:
+        sample_weight = np.asarray(sample_weight, dtype=float)
+        if sample_weight.shape != (len(y),) or np.any(sample_weight <= 0):
+            raise ValueError("sample_weight must be positive and match y.")
     outer_fold_c_values = []
     outer_hard_negative_counts = []
     for fold_number, (fit_indices, fold_indices) in enumerate(
@@ -184,6 +191,7 @@ def fit_calibrated_classifier(
                 X[fit_indices],
                 y[fit_indices],
                 random_state + fold_number,
+                sample_weight[fit_indices],
             )
         else:
             fold_c = float(fixed_c)
@@ -192,7 +200,10 @@ def fit_calibrated_classifier(
                 max_iter=2000,
                 class_weight="balanced",
             )
-            fold_classifier.fit(X[fit_indices], y[fit_indices])
+            fold_classifier.fit(
+                X[fit_indices], y[fit_indices],
+                sample_weight=sample_weight[fit_indices],
+            )
         if use_hard_negative_mining:
             fold_classifier, hard_negative_count = _refit_with_hard_negatives(
                 fold_classifier,
@@ -210,7 +221,9 @@ def fit_calibrated_classifier(
         )
 
     calibrator = LogisticRegression(max_iter=1000)
-    calibrator.fit(out_of_fold_scores.reshape(-1, 1), y)
+    calibrator.fit(
+        out_of_fold_scores.reshape(-1, 1), y, sample_weight=sample_weight
+    )
     calibrated = calibrator.predict_proba(
         out_of_fold_scores.reshape(-1, 1)
     )[:, 1]
@@ -221,6 +234,7 @@ def fit_calibrated_classifier(
             X,
             y,
             random_state + 1000,
+            sample_weight,
         )
         regularization_selection = "nested_stratified_cv_log_loss"
         regularization_c_candidates = "|".join(
@@ -233,7 +247,7 @@ def fit_calibrated_classifier(
             max_iter=2000,
             class_weight="balanced",
         )
-        classifier.fit(X, y)
+        classifier.fit(X, y, sample_weight=sample_weight)
         regularization_selection = "fixed"
         regularization_c_candidates = f"{selected_c:g}"
 
@@ -286,11 +300,21 @@ def fit_subset_probability_model(
     target_precision=0.8,
     tune_regularization=True,
     fixed_c=1.0,
-    use_hard_negative_mining=True,
+    use_hard_negative_mining=False,
     hard_negative_fraction=0.1,
     hard_negative_weight=3.0,
+    selected_class_names=None,
 ):
     X_train, _, _, _, metadata, class_mapping = ut.load_DINO_vectors(learning_dir)
+    if selected_class_names is not None:
+        requested = {name.casefold() for name in selected_class_names}
+        class_mapping = class_mapping[
+            class_mapping["label_name"].str.casefold().isin(requested)
+        ].reset_index(drop=True)
+        if len(class_mapping) != len(requested):
+            found = set(class_mapping["label_name"].str.casefold())
+            missing = sorted(requested - found)
+            raise ValueError(f"Unknown selected classes: {missing}")
     return fit_subset_probability_model_from_data(
         X_train,
         metadata,
@@ -313,15 +337,20 @@ def fit_subset_probability_model_from_data(
     target_precision=0.8,
     tune_regularization=True,
     fixed_c=1.0,
-    use_hard_negative_mining=True,
+    use_hard_negative_mining=False,
     hard_negative_fraction=0.1,
     hard_negative_weight=3.0,
+    sample_weight=None,
 ):
     X_train = np.asarray(X_train)
     metadata = metadata.reset_index(drop=True)
     class_mapping = class_mapping.reset_index(drop=True)
     if len(X_train) != len(metadata):
         raise ValueError("X_train and metadata must have the same row count.")
+    if sample_weight is not None:
+        sample_weight = np.asarray(sample_weight, dtype=float)
+        if sample_weight.shape != (len(X_train),):
+            raise ValueError("sample_weight must match X_train rows.")
 
     scaler = StandardScaler()
     X_train_scaled = scaler.fit_transform(X_train)
@@ -360,6 +389,7 @@ def fit_subset_probability_model_from_data(
             use_hard_negative_mining=use_hard_negative_mining,
             hard_negative_fraction=hard_negative_fraction,
             hard_negative_weight=hard_negative_weight,
+            sample_weight=sample_weight,
         )
         classifiers_by_class[label_id] = classifier
         class_ids.append(label_id)
@@ -477,9 +507,10 @@ def score_directory(
     matrix_output_name="subset_probability_matrix.csv",
     tune_regularization=True,
     fixed_c=1.0,
-    use_hard_negative_mining=True,
+    use_hard_negative_mining=False,
     hard_negative_fraction=0.1,
     hard_negative_weight=3.0,
+    selected_class_names=None,
 ):
     model = fit_subset_probability_model(
         learning_dir=learning_dir,
@@ -488,6 +519,7 @@ def score_directory(
         use_hard_negative_mining=use_hard_negative_mining,
         hard_negative_fraction=hard_negative_fraction,
         hard_negative_weight=hard_negative_weight,
+        selected_class_names=selected_class_names,
     )
     X_target, _, _, _, metadata, _ = ut.load_DINO_vectors(target_dir)
     scores, probability_matrix, raw_probability_matrix = score_embeddings(

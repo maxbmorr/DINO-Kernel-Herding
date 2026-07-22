@@ -75,9 +75,11 @@ def export_calibrated_test_images(
     output_dir = Path(output_dir)
     if not output_dir.is_absolute():
         output_dir = ut.PROJECT_ROOT / output_dir
-    if output_dir.exists():
-        shutil.rmtree(output_dir)
-    output_dir.mkdir(parents=True)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    for model_name in ("M_0", "M_1"):
+        model_dir = output_dir / model_name
+        if model_dir.exists():
+            shutil.rmtree(model_dir)
 
     test_dir = Path(test_dir)
     if not test_dir.is_absolute():

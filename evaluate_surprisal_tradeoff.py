@@ -19,8 +19,8 @@ OUTPUT_DIR = ut.PROJECT_ROOT / "_surprisal_tradeoff_evaluation"
 
 # An empty target list evaluates every class represented in the calibrated matrix.
 TARGET_CLASSES = []
-SURPRISAL_LAMBDAS = [0.0, 0.001, 0.005, 0.01, 0.025]
-SELECTION_COUNT = 4
+SURPRISAL_LAMBDAS = [0.001, 0.005, 0.01, 0.025]
+SELECTION_COUNT = None
 KERNEL = "rbf"
 STOP_WHEN_OBJECTIVE_DECREASES = True
 USE_KERNEL_HERDED_REFERENCES = True

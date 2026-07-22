@@ -63,10 +63,12 @@ def calibrate_baseline_and_augmented_models(
     output_dir="saved_models/calibrated",
     tune_regularization=True,
     fixed_c=1.0,
-    use_hard_negative_mining=True,
+    use_hard_negative_mining=False,
     hard_negative_fraction=0.1,
     hard_negative_weight=3.0,
     baseline_model=None,
+    selected_class_names=None,
+    selected_data_weight=1.0,
 ):
     training_dir = _resolve_path(training_dir)
     retraining_dir = _resolve_path(retraining_dir)
@@ -80,6 +82,10 @@ def calibrate_baseline_and_augmented_models(
     X_retraining, _, _, _, retraining_metadata, _ = ut.load_DINO_vectors(
         retraining_dir
     )
+    if selected_class_names is not None:
+        class_mapping = class_mapping[
+            class_mapping["label_name"].isin(selected_class_names)
+        ].reset_index(drop=True)
     selection = pd.read_csv(selection_path)
     selected_indices = _selected_retraining_indices(retraining_metadata, selection)
     if len(selected_indices) == 0:
@@ -125,6 +131,10 @@ def calibrate_baseline_and_augmented_models(
         X_augmented,
         augmented_metadata,
         class_mapping,
+        sample_weight=np.concatenate([
+            np.ones(len(X_learning), dtype=float),
+            np.full(len(selected_indices), selected_data_weight, dtype=float),
+        ]),
         **common_fit_arguments,
     )
     manifest_1 = pd.concat(

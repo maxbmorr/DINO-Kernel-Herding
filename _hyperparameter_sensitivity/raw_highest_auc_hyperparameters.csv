@@ -1,0 +1,2 @@
+lambda,selected_data_weight,C,macro_auc_mean,macro_auc_std,fold_count,micro_auc_mean,micro_auc_std,mean_selected_count,macro_auc_se,micro_auc_se,complete_cv
+0.001,1.0,0.01,0.9832874103712755,0.0016288137667276289,3,0.9844510491640536,0.0018363692448690187,56.666666666666664,0.0009403960666799649,0.0010602282778566779,True

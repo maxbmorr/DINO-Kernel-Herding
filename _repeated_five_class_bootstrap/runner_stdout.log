@@ -1,0 +1,559 @@
+Starting independent five-class run 1/10
+Selected proof-of-concept classes (seed=835959588):
+remote, airplane, cup, kite, laptop
+Multi-label train split: 4933 unique images using up to 1000 samples per class
+  remote: 1000 sampled images
+  airplane: 1000 sampled images
+  cup: 1000 sampled images
+  kite: 1000 sampled images
+  laptop: 1000 sampled images
+Random retrain split: 9866 images (2x training)
+Random test split: 19732 images (2x retraining)
+Unused images: 83756
+Ignoring checkpoint from a different random data split.
+Sweep progress: 0/288 (0.0%)
+[Fold 1/3] fitting calibrated baseline with C=0.0001
+Fitting calibrated multi-label models for 5 classes
+[Calibration 1/5] Fitting 'airplane' with 487 multi-label positives
+[Calibration 2/5] Fitting 'kite' with 504 multi-label positives
+[Calibration 3/5] Fitting 'cup' with 686 multi-label positives
+[Calibration 4/5] Fitting 'laptop' with 588 multi-label positives
+[Calibration 5/5] Fitting 'remote' with 564 multi-label positives
+Fit 5 calibrated subset models on 2466 images
+Sweep progress: 1/288 (0.3%) | C=0.0001 | ETA ~19.7 min
+Sweep progress: 2/288 (0.7%) | C=0.0001 | ETA ~10.0 min
+Sweep progress: 3/288 (1.0%) | C=0.0001 | ETA ~6.8 min
+Sweep progress: 4/288 (1.4%) | C=0.0001 | ETA ~5.2 min
+Sweep progress: 5/288 (1.7%) | C=0.0001 | ETA ~5.8 min
+Sweep progress: 6/288 (2.1%) | C=0.0001 | ETA ~4.9 min
+Sweep progress: 7/288 (2.4%) | C=0.0001 | ETA ~4.3 min
+Sweep progress: 8/288 (2.8%) | C=0.0001 | ETA ~3.8 min
+Sweep progress: 9/288 (3.1%) | C=0.0001 | ETA ~4.1 min
+Sweep progress: 10/288 (3.5%) | C=0.0001 | ETA ~3.7 min
+Sweep progress: 11/288 (3.8%) | C=0.0001 | ETA ~3.4 min
+Sweep progress: 12/288 (4.2%) | C=0.0001 | ETA ~3.1 min
+Sweep progress: 13/288 (4.5%) | C=0.0001 | ETA ~3.2 min
+Sweep progress: 14/288 (4.9%) | C=0.0001 | ETA ~3.0 min
+Sweep progress: 15/288 (5.2%) | C=0.0001 | ETA ~2.8 min
+Sweep progress: 16/288 (5.6%) | C=0.0001 | ETA ~2.7 min
+[Fold 1/3] fitting calibrated baseline with C=0.001
+Fitting calibrated multi-label models for 5 classes
+[Calibration 1/5] Fitting 'airplane' with 487 multi-label positives
+[Calibration 2/5] Fitting 'kite' with 504 multi-label positives
+[Calibration 3/5] Fitting 'cup' with 686 multi-label positives
+[Calibration 4/5] Fitting 'laptop' with 588 multi-label positives
+[Calibration 5/5] Fitting 'remote' with 564 multi-label positives
+Fit 5 calibrated subset models on 2466 images
+Sweep progress: 17/288 (5.9%) | C=0.001 | ETA ~3.7 min
+Sweep progress: 18/288 (6.2%) | C=0.001 | ETA ~3.5 min
+Sweep progress: 19/288 (6.6%) | C=0.001 | ETA ~3.3 min
+Sweep progress: 20/288 (6.9%) | C=0.001 | ETA ~3.2 min
+Sweep progress: 21/288 (7.3%) | C=0.001 | ETA ~3.4 min
+Sweep progress: 22/288 (7.6%) | C=0.001 | ETA ~3.3 min
+Sweep progress: 23/288 (8.0%) | C=0.001 | ETA ~3.1 min
+Sweep progress: 24/288 (8.3%) | C=0.001 | ETA ~3.0 min
+Sweep progress: 25/288 (8.7%) | C=0.001 | ETA ~3.2 min
+Sweep progress: 26/288 (9.0%) | C=0.001 | ETA ~3.1 min
+Sweep progress: 27/288 (9.4%) | C=0.001 | ETA ~2.9 min
+Sweep progress: 28/288 (9.7%) | C=0.001 | ETA ~2.8 min
+Sweep progress: 29/288 (10.1%) | C=0.001 | ETA ~2.9 min
+Sweep progress: 30/288 (10.4%) | C=0.001 | ETA ~2.8 min
+Sweep progress: 31/288 (10.8%) | C=0.001 | ETA ~2.7 min
+Sweep progress: 32/288 (11.1%) | C=0.001 | ETA ~2.7 min
+[Fold 1/3] fitting calibrated baseline with C=0.01
+Fitting calibrated multi-label models for 5 classes
+[Calibration 1/5] Fitting 'airplane' with 487 multi-label positives
+[Calibration 2/5] Fitting 'kite' with 504 multi-label positives
+[Calibration 3/5] Fitting 'cup' with 686 multi-label positives
+[Calibration 4/5] Fitting 'laptop' with 588 multi-label positives
+[Calibration 5/5] Fitting 'remote' with 564 multi-label positives
+Fit 5 calibrated subset models on 2466 images
+Sweep progress: 33/288 (11.5%) | C=0.01 | ETA ~3.2 min
+Sweep progress: 34/288 (11.8%) | C=0.01 | ETA ~3.2 min
+Sweep progress: 35/288 (12.2%) | C=0.01 | ETA ~3.1 min
+Sweep progress: 36/288 (12.5%) | C=0.01 | ETA ~3.0 min
+Sweep progress: 37/288 (12.8%) | C=0.01 | ETA ~3.2 min
+Sweep progress: 38/288 (13.2%) | C=0.01 | ETA ~3.1 min
+Sweep progress: 39/288 (13.5%) | C=0.01 | ETA ~3.0 min
+Sweep progress: 40/288 (13.9%) | C=0.01 | ETA ~2.9 min
+Sweep progress: 41/288 (14.2%) | C=0.01 | ETA ~3.1 min
+Sweep progress: 42/288 (14.6%) | C=0.01 | ETA ~3.0 min
+Sweep progress: 43/288 (14.9%) | C=0.01 | ETA ~2.9 min
+Sweep progress: 44/288 (15.3%) | C=0.01 | ETA ~2.9 min
+Sweep progress: 45/288 (15.6%) | C=0.01 | ETA ~2.9 min
+Sweep progress: 46/288 (16.0%) | C=0.01 | ETA ~2.8 min
+Sweep progress: 47/288 (16.3%) | C=0.01 | ETA ~2.8 min
+Sweep progress: 48/288 (16.7%) | C=0.01 | ETA ~2.7 min
+[Fold 1/3] fitting calibrated baseline with C=0.1
+Fitting calibrated multi-label models for 5 classes
+[Calibration 1/5] Fitting 'airplane' with 487 multi-label positives
+[Calibration 2/5] Fitting 'kite' with 504 multi-label positives
+[Calibration 3/5] Fitting 'cup' with 686 multi-label positives
+[Calibration 4/5] Fitting 'laptop' with 588 multi-label positives
+[Calibration 5/5] Fitting 'remote' with 564 multi-label positives
+Fit 5 calibrated subset models on 2466 images
+Sweep progress: 49/288 (17.0%) | C=0.1 | ETA ~3.1 min
+Sweep progress: 50/288 (17.4%) | C=0.1 | ETA ~3.0 min
+Sweep progress: 51/288 (17.7%) | C=0.1 | ETA ~3.0 min
+Sweep progress: 52/288 (18.1%) | C=0.1 | ETA ~2.9 min
+Sweep progress: 53/288 (18.4%) | C=0.1 | ETA ~3.1 min
+Sweep progress: 54/288 (18.8%) | C=0.1 | ETA ~3.1 min
+Sweep progress: 55/288 (19.1%) | C=0.1 | ETA ~3.0 min
+Sweep progress: 56/288 (19.4%) | C=0.1 | ETA ~2.9 min
+Sweep progress: 57/288 (19.8%) | C=0.1 | ETA ~3.1 min
+Sweep progress: 58/288 (20.1%) | C=0.1 | ETA ~3.0 min
+Sweep progress: 59/288 (20.5%) | C=0.1 | ETA ~2.9 min
+Sweep progress: 60/288 (20.8%) | C=0.1 | ETA ~2.9 min
+Sweep progress: 61/288 (21.2%) | C=0.1 | ETA ~2.9 min
+Sweep progress: 62/288 (21.5%) | C=0.1 | ETA ~2.9 min
+Sweep progress: 63/288 (21.9%) | C=0.1 | ETA ~2.8 min
+Sweep progress: 64/288 (22.2%) | C=0.1 | ETA ~2.8 min
+[Fold 1/3] fitting calibrated baseline with C=1
+Fitting calibrated multi-label models for 5 classes
+[Calibration 1/5] Fitting 'airplane' with 487 multi-label positives
+[Calibration 2/5] Fitting 'kite' with 504 multi-label positives
+[Calibration 3/5] Fitting 'cup' with 686 multi-label positives
+[Calibration 4/5] Fitting 'laptop' with 588 multi-label positives
+[Calibration 5/5] Fitting 'remote' with 564 multi-label positives
+Fit 5 calibrated subset models on 2466 images
+Sweep progress: 65/288 (22.6%) | C=1 | ETA ~3.1 min
+Sweep progress: 66/288 (22.9%) | C=1 | ETA ~3.0 min
+Sweep progress: 67/288 (23.3%) | C=1 | ETA ~3.0 min
+Sweep progress: 68/288 (23.6%) | C=1 | ETA ~2.9 min
+Sweep progress: 69/288 (24.0%) | C=1 | ETA ~3.0 min
+Sweep progress: 70/288 (24.3%) | C=1 | ETA ~3.0 min
+Sweep progress: 71/288 (24.7%) | C=1 | ETA ~2.9 min
+Sweep progress: 72/288 (25.0%) | C=1 | ETA ~2.9 min
+Sweep progress: 73/288 (25.3%) | C=1 | ETA ~2.9 min
+Sweep progress: 74/288 (25.7%) | C=1 | ETA ~2.9 min
+Sweep progress: 75/288 (26.0%) | C=1 | ETA ~2.9 min
+Sweep progress: 76/288 (26.4%) | C=1 | ETA ~2.8 min
+Sweep progress: 77/288 (26.7%) | C=1 | ETA ~2.8 min
+Sweep progress: 78/288 (27.1%) | C=1 | ETA ~2.8 min
+Sweep progress: 79/288 (27.4%) | C=1 | ETA ~2.8 min
+Sweep progress: 80/288 (27.8%) | C=1 | ETA ~2.7 min
+[Fold 1/3] fitting calibrated baseline with C=10
+Fitting calibrated multi-label models for 5 classes
+[Calibration 1/5] Fitting 'airplane' with 487 multi-label positives
+[Calibration 2/5] Fitting 'kite' with 504 multi-label positives
+[Calibration 3/5] Fitting 'cup' with 686 multi-label positives
+[Calibration 4/5] Fitting 'laptop' with 588 multi-label positives
+[Calibration 5/5] Fitting 'remote' with 564 multi-label positives
+Fit 5 calibrated subset models on 2466 images
+Sweep progress: 81/288 (28.1%) | C=10 | ETA ~2.9 min
+Sweep progress: 82/288 (28.5%) | C=10 | ETA ~2.9 min
+Sweep progress: 83/288 (28.8%) | C=10 | ETA ~2.9 min
+Sweep progress: 84/288 (29.2%) | C=10 | ETA ~2.8 min
+Sweep progress: 85/288 (29.5%) | C=10 | ETA ~2.9 min
+Sweep progress: 86/288 (29.9%) | C=10 | ETA ~2.8 min
+Sweep progress: 87/288 (30.2%) | C=10 | ETA ~2.8 min
+Sweep progress: 88/288 (30.6%) | C=10 | ETA ~2.7 min
+Sweep progress: 89/288 (30.9%) | C=10 | ETA ~2.8 min
+Sweep progress: 90/288 (31.2%) | C=10 | ETA ~2.7 min
+Sweep progress: 91/288 (31.6%) | C=10 | ETA ~2.7 min
+Sweep progress: 92/288 (31.9%) | C=10 | ETA ~2.7 min
+Sweep progress: 93/288 (32.3%) | C=10 | ETA ~2.7 min
+Sweep progress: 94/288 (32.6%) | C=10 | ETA ~2.6 min
+Sweep progress: 95/288 (33.0%) | C=10 | ETA ~2.6 min
+Sweep progress: 96/288 (33.3%) | C=10 | ETA ~2.6 min
+[Fold 2/3] fitting calibrated baseline with C=0.0001
+Fitting calibrated multi-label models for 5 classes
+[Calibration 1/5] Fitting 'airplane' with 474 multi-label positives
+[Calibration 2/5] Fitting 'kite' with 538 multi-label positives
+[Calibration 3/5] Fitting 'cup' with 682 multi-label positives
+[Calibration 4/5] Fitting 'laptop' with 581 multi-label positives
+[Calibration 5/5] Fitting 'remote' with 541 multi-label positives
+Fit 5 calibrated subset models on 2467 images
+Sweep progress: 97/288 (33.7%) | C=0.0001 | ETA ~2.7 min
+Sweep progress: 98/288 (34.0%) | C=0.0001 | ETA ~2.6 min
+Sweep progress: 99/288 (34.4%) | C=0.0001 | ETA ~2.6 min
+Sweep progress: 100/288 (34.7%) | C=0.0001 | ETA ~2.5 min
+Sweep progress: 101/288 (35.1%) | C=0.0001 | ETA ~2.5 min
+Sweep progress: 102/288 (35.4%) | C=0.0001 | ETA ~2.5 min
+Sweep progress: 103/288 (35.8%) | C=0.0001 | ETA ~2.5 min
+Sweep progress: 104/288 (36.1%) | C=0.0001 | ETA ~2.4 min
+Sweep progress: 105/288 (36.5%) | C=0.0001 | ETA ~2.4 min
+Sweep progress: 106/288 (36.8%) | C=0.0001 | ETA ~2.4 min
+Sweep progress: 107/288 (37.2%) | C=0.0001 | ETA ~2.4 min
+Sweep progress: 108/288 (37.5%) | C=0.0001 | ETA ~2.3 min
+Sweep progress: 109/288 (37.8%) | C=0.0001 | ETA ~2.3 min
+Sweep progress: 110/288 (38.2%) | C=0.0001 | ETA ~2.3 min
+Sweep progress: 111/288 (38.5%) | C=0.0001 | ETA ~2.3 min
+Sweep progress: 112/288 (38.9%) | C=0.0001 | ETA ~2.2 min
+[Fold 2/3] fitting calibrated baseline with C=0.001
+Fitting calibrated multi-label models for 5 classes
+[Calibration 1/5] Fitting 'airplane' with 474 multi-label positives
+[Calibration 2/5] Fitting 'kite' with 538 multi-label positives
+[Calibration 3/5] Fitting 'cup' with 682 multi-label positives
+[Calibration 4/5] Fitting 'laptop' with 581 multi-label positives
+[Calibration 5/5] Fitting 'remote' with 541 multi-label positives
+Fit 5 calibrated subset models on 2467 images
+Sweep progress: 113/288 (39.2%) | C=0.001 | ETA ~2.3 min
+Sweep progress: 114/288 (39.6%) | C=0.001 | ETA ~2.3 min
+Sweep progress: 115/288 (39.9%) | C=0.001 | ETA ~2.2 min
+Sweep progress: 116/288 (40.3%) | C=0.001 | ETA ~2.2 min
+Sweep progress: 117/288 (40.6%) | C=0.001 | ETA ~2.2 min
+Sweep progress: 118/288 (41.0%) | C=0.001 | ETA ~2.2 min
+Sweep progress: 119/288 (41.3%) | C=0.001 | ETA ~2.2 min
+Sweep progress: 120/288 (41.7%) | C=0.001 | ETA ~2.1 min
+Sweep progress: 121/288 (42.0%) | C=0.001 | ETA ~2.1 min
+Sweep progress: 122/288 (42.4%) | C=0.001 | ETA ~2.1 min
+Sweep progress: 123/288 (42.7%) | C=0.001 | ETA ~2.1 min
+Sweep progress: 124/288 (43.1%) | C=0.001 | ETA ~2.1 min
+Sweep progress: 125/288 (43.4%) | C=0.001 | ETA ~2.1 min
+Sweep progress: 126/288 (43.8%) | C=0.001 | ETA ~2.0 min
+Sweep progress: 127/288 (44.1%) | C=0.001 | ETA ~2.0 min
+Sweep progress: 128/288 (44.4%) | C=0.001 | ETA ~2.0 min
+[Fold 2/3] fitting calibrated baseline with C=0.01
+Fitting calibrated multi-label models for 5 classes
+[Calibration 1/5] Fitting 'airplane' with 474 multi-label positives
+[Calibration 2/5] Fitting 'kite' with 538 multi-label positives
+[Calibration 3/5] Fitting 'cup' with 682 multi-label positives
+[Calibration 4/5] Fitting 'laptop' with 581 multi-label positives
+[Calibration 5/5] Fitting 'remote' with 541 multi-label positives
+Fit 5 calibrated subset models on 2467 images
+Sweep progress: 129/288 (44.8%) | C=0.01 | ETA ~2.1 min
+Sweep progress: 130/288 (45.1%) | C=0.01 | ETA ~2.0 min
+Sweep progress: 131/288 (45.5%) | C=0.01 | ETA ~2.0 min
+Sweep progress: 132/288 (45.8%) | C=0.01 | ETA ~2.0 min
+Sweep progress: 133/288 (46.2%) | C=0.01 | ETA ~2.0 min
+Sweep progress: 134/288 (46.5%) | C=0.01 | ETA ~2.0 min
+Sweep progress: 135/288 (46.9%) | C=0.01 | ETA ~1.9 min
+Sweep progress: 136/288 (47.2%) | C=0.01 | ETA ~1.9 min
+Sweep progress: 137/288 (47.6%) | C=0.01 | ETA ~1.9 min
+Sweep progress: 138/288 (47.9%) | C=0.01 | ETA ~1.9 min
+Sweep progress: 139/288 (48.3%) | C=0.01 | ETA ~1.9 min
+Sweep progress: 140/288 (48.6%) | C=0.01 | ETA ~1.9 min
+Sweep progress: 141/288 (49.0%) | C=0.01 | ETA ~1.8 min
+Sweep progress: 142/288 (49.3%) | C=0.01 | ETA ~1.8 min
+Sweep progress: 143/288 (49.7%) | C=0.01 | ETA ~1.8 min
+Sweep progress: 144/288 (50.0%) | C=0.01 | ETA ~1.8 min
+[Fold 2/3] fitting calibrated baseline with C=0.1
+Fitting calibrated multi-label models for 5 classes
+[Calibration 1/5] Fitting 'airplane' with 474 multi-label positives
+[Calibration 2/5] Fitting 'kite' with 538 multi-label positives
+[Calibration 3/5] Fitting 'cup' with 682 multi-label positives
+[Calibration 4/5] Fitting 'laptop' with 581 multi-label positives
+[Calibration 5/5] Fitting 'remote' with 541 multi-label positives
+Fit 5 calibrated subset models on 2467 images
+Sweep progress: 145/288 (50.3%) | C=0.1 | ETA ~1.8 min
+Sweep progress: 146/288 (50.7%) | C=0.1 | ETA ~1.8 min
+Sweep progress: 147/288 (51.0%) | C=0.1 | ETA ~1.8 min
+Sweep progress: 148/288 (51.4%) | C=0.1 | ETA ~1.8 min
+Sweep progress: 149/288 (51.7%) | C=0.1 | ETA ~1.8 min
+Sweep progress: 150/288 (52.1%) | C=0.1 | ETA ~1.8 min
+Sweep progress: 151/288 (52.4%) | C=0.1 | ETA ~1.7 min
+Sweep progress: 152/288 (52.8%) | C=0.1 | ETA ~1.7 min
+Sweep progress: 153/288 (53.1%) | C=0.1 | ETA ~1.7 min
+Sweep progress: 154/288 (53.5%) | C=0.1 | ETA ~1.7 min
+Sweep progress: 155/288 (53.8%) | C=0.1 | ETA ~1.7 min
+Sweep progress: 156/288 (54.2%) | C=0.1 | ETA ~1.7 min
+Sweep progress: 157/288 (54.5%) | C=0.1 | ETA ~1.7 min
+Sweep progress: 158/288 (54.9%) | C=0.1 | ETA ~1.6 min
+Sweep progress: 159/288 (55.2%) | C=0.1 | ETA ~1.6 min
+Sweep progress: 160/288 (55.6%) | C=0.1 | ETA ~1.6 min
+[Fold 2/3] fitting calibrated baseline with C=1
+Fitting calibrated multi-label models for 5 classes
+[Calibration 1/5] Fitting 'airplane' with 474 multi-label positives
+[Calibration 2/5] Fitting 'kite' with 538 multi-label positives
+[Calibration 3/5] Fitting 'cup' with 682 multi-label positives
+[Calibration 4/5] Fitting 'laptop' with 581 multi-label positives
+[Calibration 5/5] Fitting 'remote' with 541 multi-label positives
+Fit 5 calibrated subset models on 2467 images
+Sweep progress: 161/288 (55.9%) | C=1 | ETA ~1.6 min
+Sweep progress: 162/288 (56.2%) | C=1 | ETA ~1.6 min
+Sweep progress: 163/288 (56.6%) | C=1 | ETA ~1.6 min
+Sweep progress: 164/288 (56.9%) | C=1 | ETA ~1.6 min
+Sweep progress: 165/288 (57.3%) | C=1 | ETA ~1.6 min
+Sweep progress: 166/288 (57.6%) | C=1 | ETA ~1.6 min
+Sweep progress: 167/288 (58.0%) | C=1 | ETA ~1.5 min
+Sweep progress: 168/288 (58.3%) | C=1 | ETA ~1.5 min
+Sweep progress: 169/288 (58.7%) | C=1 | ETA ~1.5 min
+Sweep progress: 170/288 (59.0%) | C=1 | ETA ~1.5 min
+Sweep progress: 171/288 (59.4%) | C=1 | ETA ~1.5 min
+Sweep progress: 172/288 (59.7%) | C=1 | ETA ~1.5 min
+Sweep progress: 173/288 (60.1%) | C=1 | ETA ~1.5 min
+Sweep progress: 174/288 (60.4%) | C=1 | ETA ~1.4 min
+Sweep progress: 175/288 (60.8%) | C=1 | ETA ~1.4 min
+Sweep progress: 176/288 (61.1%) | C=1 | ETA ~1.4 min
+[Fold 2/3] fitting calibrated baseline with C=10
+Fitting calibrated multi-label models for 5 classes
+[Calibration 1/5] Fitting 'airplane' with 474 multi-label positives
+[Calibration 2/5] Fitting 'kite' with 538 multi-label positives
+[Calibration 3/5] Fitting 'cup' with 682 multi-label positives
+[Calibration 4/5] Fitting 'laptop' with 581 multi-label positives
+[Calibration 5/5] Fitting 'remote' with 541 multi-label positives
+Fit 5 calibrated subset models on 2467 images
+Sweep progress: 177/288 (61.5%) | C=10 | ETA ~1.4 min
+Sweep progress: 178/288 (61.8%) | C=10 | ETA ~1.4 min
+Sweep progress: 179/288 (62.2%) | C=10 | ETA ~1.4 min
+Sweep progress: 180/288 (62.5%) | C=10 | ETA ~1.4 min
+Sweep progress: 181/288 (62.8%) | C=10 | ETA ~1.4 min
+Sweep progress: 182/288 (63.2%) | C=10 | ETA ~1.4 min
+Sweep progress: 183/288 (63.5%) | C=10 | ETA ~1.4 min
+Sweep progress: 184/288 (63.9%) | C=10 | ETA ~1.3 min
+Sweep progress: 185/288 (64.2%) | C=10 | ETA ~1.3 min
+Sweep progress: 186/288 (64.6%) | C=10 | ETA ~1.3 min
+Sweep progress: 187/288 (64.9%) | C=10 | ETA ~1.3 min
+Sweep progress: 188/288 (65.3%) | C=10 | ETA ~1.3 min
+Sweep progress: 189/288 (65.6%) | C=10 | ETA ~1.3 min
+Sweep progress: 190/288 (66.0%) | C=10 | ETA ~1.3 min
+Sweep progress: 191/288 (66.3%) | C=10 | ETA ~1.2 min
+Sweep progress: 192/288 (66.7%) | C=10 | ETA ~1.2 min
+[Fold 3/3] fitting calibrated baseline with C=0.0001
+Fitting calibrated multi-label models for 5 classes
+[Calibration 1/5] Fitting 'airplane' with 540 multi-label positives
+[Calibration 2/5] Fitting 'kite' with 485 multi-label positives
+[Calibration 3/5] Fitting 'cup' with 667 multi-label positives
+[Calibration 4/5] Fitting 'laptop' with 554 multi-label positives
+[Calibration 5/5] Fitting 'remote' with 559 multi-label positives
+Fit 5 calibrated subset models on 2467 images
+Sweep progress: 193/288 (67.0%) | C=0.0001 | ETA ~1.2 min
+Sweep progress: 194/288 (67.4%) | C=0.0001 | ETA ~1.2 min
+Sweep progress: 195/288 (67.7%) | C=0.0001 | ETA ~1.2 min
+Sweep progress: 196/288 (68.1%) | C=0.0001 | ETA ~1.2 min
+Sweep progress: 197/288 (68.4%) | C=0.0001 | ETA ~1.2 min
+Sweep progress: 198/288 (68.8%) | C=0.0001 | ETA ~1.2 min
+Sweep progress: 199/288 (69.1%) | C=0.0001 | ETA ~1.1 min
+Sweep progress: 200/288 (69.4%) | C=0.0001 | ETA ~1.1 min
+Sweep progress: 201/288 (69.8%) | C=0.0001 | ETA ~1.1 min
+Sweep progress: 202/288 (70.1%) | C=0.0001 | ETA ~1.1 min
+Sweep progress: 203/288 (70.5%) | C=0.0001 | ETA ~1.1 min
+Sweep progress: 204/288 (70.8%) | C=0.0001 | ETA ~1.1 min
+Sweep progress: 205/288 (71.2%) | C=0.0001 | ETA ~1.1 min
+Sweep progress: 206/288 (71.5%) | C=0.0001 | ETA ~1.0 min
+Sweep progress: 207/288 (71.9%) | C=0.0001 | ETA ~1.0 min
+Sweep progress: 208/288 (72.2%) | C=0.0001 | ETA ~1.0 min
+[Fold 3/3] fitting calibrated baseline with C=0.001
+Fitting calibrated multi-label models for 5 classes
+[Calibration 1/5] Fitting 'airplane' with 540 multi-label positives
+[Calibration 2/5] Fitting 'kite' with 485 multi-label positives
+[Calibration 3/5] Fitting 'cup' with 667 multi-label positives
+[Calibration 4/5] Fitting 'laptop' with 554 multi-label positives
+[Calibration 5/5] Fitting 'remote' with 559 multi-label positives
+Fit 5 calibrated subset models on 2467 images
+Sweep progress: 209/288 (72.6%) | C=0.001 | ETA ~1.0 min
+Sweep progress: 210/288 (72.9%) | C=0.001 | ETA ~1.0 min
+Sweep progress: 211/288 (73.3%) | C=0.001 | ETA ~1.0 min
+Sweep progress: 212/288 (73.6%) | C=0.001 | ETA ~1.0 min
+Sweep progress: 213/288 (74.0%) | C=0.001 | ETA ~1.0 min
+Sweep progress: 214/288 (74.3%) | C=0.001 | ETA ~0.9 min
+Sweep progress: 215/288 (74.7%) | C=0.001 | ETA ~0.9 min
+Sweep progress: 216/288 (75.0%) | C=0.001 | ETA ~0.9 min
+Sweep progress: 217/288 (75.3%) | C=0.001 | ETA ~0.9 min
+Sweep progress: 218/288 (75.7%) | C=0.001 | ETA ~0.9 min
+Sweep progress: 219/288 (76.0%) | C=0.001 | ETA ~0.9 min
+Sweep progress: 220/288 (76.4%) | C=0.001 | ETA ~0.9 min
+Sweep progress: 221/288 (76.7%) | C=0.001 | ETA ~0.8 min
+Sweep progress: 222/288 (77.1%) | C=0.001 | ETA ~0.8 min
+Sweep progress: 223/288 (77.4%) | C=0.001 | ETA ~0.8 min
+Sweep progress: 224/288 (77.8%) | C=0.001 | ETA ~0.8 min
+[Fold 3/3] fitting calibrated baseline with C=0.01
+Fitting calibrated multi-label models for 5 classes
+[Calibration 1/5] Fitting 'airplane' with 540 multi-label positives
+[Calibration 2/5] Fitting 'kite' with 485 multi-label positives
+[Calibration 3/5] Fitting 'cup' with 667 multi-label positives
+[Calibration 4/5] Fitting 'laptop' with 554 multi-label positives
+[Calibration 5/5] Fitting 'remote' with 559 multi-label positives
+Fit 5 calibrated subset models on 2467 images
+Sweep progress: 225/288 (78.1%) | C=0.01 | ETA ~0.8 min
+Sweep progress: 226/288 (78.5%) | C=0.01 | ETA ~0.8 min
+Sweep progress: 227/288 (78.8%) | C=0.01 | ETA ~0.8 min
+Sweep progress: 228/288 (79.2%) | C=0.01 | ETA ~0.8 min
+Sweep progress: 229/288 (79.5%) | C=0.01 | ETA ~0.8 min
+Sweep progress: 230/288 (79.9%) | C=0.01 | ETA ~0.7 min
+Sweep progress: 231/288 (80.2%) | C=0.01 | ETA ~0.7 min
+Sweep progress: 232/288 (80.6%) | C=0.01 | ETA ~0.7 min
+Sweep progress: 233/288 (80.9%) | C=0.01 | ETA ~0.7 min
+Sweep progress: 234/288 (81.2%) | C=0.01 | ETA ~0.7 min
+Sweep progress: 235/288 (81.6%) | C=0.01 | ETA ~0.7 min
+Sweep progress: 236/288 (81.9%) | C=0.01 | ETA ~0.7 min
+Sweep progress: 237/288 (82.3%) | C=0.01 | ETA ~0.7 min
+Sweep progress: 238/288 (82.6%) | C=0.01 | ETA ~0.6 min
+Sweep progress: 239/288 (83.0%) | C=0.01 | ETA ~0.6 min
+Sweep progress: 240/288 (83.3%) | C=0.01 | ETA ~0.6 min
+[Fold 3/3] fitting calibrated baseline with C=0.1
+Fitting calibrated multi-label models for 5 classes
+[Calibration 1/5] Fitting 'airplane' with 540 multi-label positives
+[Calibration 2/5] Fitting 'kite' with 485 multi-label positives
+[Calibration 3/5] Fitting 'cup' with 667 multi-label positives
+[Calibration 4/5] Fitting 'laptop' with 554 multi-label positives
+[Calibration 5/5] Fitting 'remote' with 559 multi-label positives
+Fit 5 calibrated subset models on 2467 images
+Sweep progress: 241/288 (83.7%) | C=0.1 | ETA ~0.6 min
+Sweep progress: 242/288 (84.0%) | C=0.1 | ETA ~0.6 min
+Sweep progress: 243/288 (84.4%) | C=0.1 | ETA ~0.6 min
+Sweep progress: 244/288 (84.7%) | C=0.1 | ETA ~0.6 min
+Sweep progress: 245/288 (85.1%) | C=0.1 | ETA ~0.6 min
+Sweep progress: 246/288 (85.4%) | C=0.1 | ETA ~0.5 min
+Sweep progress: 247/288 (85.8%) | C=0.1 | ETA ~0.5 min
+Sweep progress: 248/288 (86.1%) | C=0.1 | ETA ~0.5 min
+Sweep progress: 249/288 (86.5%) | C=0.1 | ETA ~0.5 min
+Sweep progress: 250/288 (86.8%) | C=0.1 | ETA ~0.5 min
+Sweep progress: 251/288 (87.2%) | C=0.1 | ETA ~0.5 min
+Sweep progress: 252/288 (87.5%) | C=0.1 | ETA ~0.5 min
+Sweep progress: 253/288 (87.8%) | C=0.1 | ETA ~0.5 min
+Sweep progress: 254/288 (88.2%) | C=0.1 | ETA ~0.4 min
+Sweep progress: 255/288 (88.5%) | C=0.1 | ETA ~0.4 min
+Sweep progress: 256/288 (88.9%) | C=0.1 | ETA ~0.4 min
+[Fold 3/3] fitting calibrated baseline with C=1
+Fitting calibrated multi-label models for 5 classes
+[Calibration 1/5] Fitting 'airplane' with 540 multi-label positives
+[Calibration 2/5] Fitting 'kite' with 485 multi-label positives
+[Calibration 3/5] Fitting 'cup' with 667 multi-label positives
+[Calibration 4/5] Fitting 'laptop' with 554 multi-label positives
+[Calibration 5/5] Fitting 'remote' with 559 multi-label positives
+Fit 5 calibrated subset models on 2467 images
+Sweep progress: 257/288 (89.2%) | C=1 | ETA ~0.4 min
+Sweep progress: 258/288 (89.6%) | C=1 | ETA ~0.4 min
+Sweep progress: 259/288 (89.9%) | C=1 | ETA ~0.4 min
+Sweep progress: 260/288 (90.3%) | C=1 | ETA ~0.4 min
+Sweep progress: 261/288 (90.6%) | C=1 | ETA ~0.4 min
+Sweep progress: 262/288 (91.0%) | C=1 | ETA ~0.3 min
+Sweep progress: 263/288 (91.3%) | C=1 | ETA ~0.3 min
+Sweep progress: 264/288 (91.7%) | C=1 | ETA ~0.3 min
+Sweep progress: 265/288 (92.0%) | C=1 | ETA ~0.3 min
+Sweep progress: 266/288 (92.4%) | C=1 | ETA ~0.3 min
+Sweep progress: 267/288 (92.7%) | C=1 | ETA ~0.3 min
+Sweep progress: 268/288 (93.1%) | C=1 | ETA ~0.3 min
+Sweep progress: 269/288 (93.4%) | C=1 | ETA ~0.3 min
+Sweep progress: 270/288 (93.8%) | C=1 | ETA ~0.2 min
+Sweep progress: 271/288 (94.1%) | C=1 | ETA ~0.2 min
+Sweep progress: 272/288 (94.4%) | C=1 | ETA ~0.2 min
+[Fold 3/3] fitting calibrated baseline with C=10
+Fitting calibrated multi-label models for 5 classes
+[Calibration 1/5] Fitting 'airplane' with 540 multi-label positives
+[Calibration 2/5] Fitting 'kite' with 485 multi-label positives
+[Calibration 3/5] Fitting 'cup' with 667 multi-label positives
+[Calibration 4/5] Fitting 'laptop' with 554 multi-label positives
+[Calibration 5/5] Fitting 'remote' with 559 multi-label positives
+Fit 5 calibrated subset models on 2467 images
+Sweep progress: 273/288 (94.8%) | C=10 | ETA ~0.2 min
+Sweep progress: 274/288 (95.1%) | C=10 | ETA ~0.2 min
+Sweep progress: 275/288 (95.5%) | C=10 | ETA ~0.2 min
+Sweep progress: 276/288 (95.8%) | C=10 | ETA ~0.2 min
+Sweep progress: 277/288 (96.2%) | C=10 | ETA ~0.1 min
+Sweep progress: 278/288 (96.5%) | C=10 | ETA ~0.1 min
+Sweep progress: 279/288 (96.9%) | C=10 | ETA ~0.1 min
+Sweep progress: 280/288 (97.2%) | C=10 | ETA ~0.1 min
+Sweep progress: 281/288 (97.6%) | C=10 | ETA ~0.1 min
+Sweep progress: 282/288 (97.9%) | C=10 | ETA ~0.1 min
+Sweep progress: 283/288 (98.3%) | C=10 | ETA ~0.1 min
+Sweep progress: 284/288 (98.6%) | C=10 | ETA ~0.1 min
+Sweep progress: 285/288 (99.0%) | C=10 | ETA ~0.0 min
+Sweep progress: 286/288 (99.3%) | C=10 | ETA ~0.0 min
+Sweep progress: 287/288 (99.7%) | C=10 | ETA ~0.0 min
+Sweep progress: 288/288 (100.0%) | C=10 | ETA ~0.0 min
+Raw highest-mean-macro-AUC configuration:
+ lambda  selected_data_weight     C  macro_auc_mean  macro_auc_std  fold_count  micro_auc_mean  micro_auc_std  mean_selected_count  macro_auc_se  micro_auc_se
+  0.001                   1.0 0.001         0.96807       0.002558         3.0        0.975953       0.002755            43.333333      0.001477      0.001591
+Warning: raw optimum is on the search boundary for: lambda, selected_data_weight. Expand those grids before treating the optimum as settled.
+Selected by the one-standard-error rule:
+ lambda  selected_data_weight     C  macro_auc_mean  macro_auc_std  fold_count  micro_auc_mean  micro_auc_std  mean_selected_count  macro_auc_se  micro_auc_se  lambda_log_distance_from_center     selection_rule  raw_best_macro_auc_mean  raw_best_macro_auc_se  one_se_macro_auc_threshold  competitive_configuration_count raw_optimum_boundary_parameters
+  0.005                 0.001 0.001        0.968058       0.002666         3.0        0.975894       0.002835            22.333333      0.001539      0.001637                         0.173287 one_standard_error                  0.96807               0.001477                    0.966594                               32     lambda|selected_data_weight
+Final selected C=0.001
+Applying selected hyperparameters: lambda=0.005, trust=0.001, C=0.001
+Trained on 1696 labeled images from saved_vectors/train
+Tested on 545 labeled images from saved_vectors/test
+Accuracy: 0.967
+              precision    recall  f1-score   support
+
+    airplane       0.99      0.99      0.99       313
+        kite       0.98      0.98      0.98        83
+         cup       1.00      0.81      0.89        42
+      laptop       0.93      0.95      0.94        95
+      remote       0.65      0.92      0.76        12
+
+    accuracy                           0.97       545
+   macro avg       0.91      0.93      0.91       545
+weighted avg       0.97      0.97      0.97       545
+
+Fitting calibrated multi-label models for 5 classes
+[Calibration 1/5] Fitting 'airplane' with 1006 multi-label positives
+[Calibration 2/5] Fitting 'kite' with 1005 multi-label positives
+[Calibration 3/5] Fitting 'cup' with 1358 multi-label positives
+[Calibration 4/5] Fitting 'laptop' with 1154 multi-label positives
+[Calibration 5/5] Fitting 'remote' with 1101 multi-label positives
+Fit 5 calibrated subset models on 4933 images
+Saved calibrated subset scores -> C:\Users\maxbe\Downloads\DINO-Kernel-Herding\saved_vectors\retrain\subset_probability_scores.csv
+Saved calibrated probability matrix -> C:\Users\maxbe\Downloads\DINO-Kernel-Herding\saved_vectors\retrain\subset_probability_matrix.csv
+Probabilities use COCO multi-label targets and held-out sigmoid calibration.
+Running global von Neumann optimization for 5 subsets
+Optimization settings: selection_count=None, lambda=0.005, kernel=rbf, reference_method=kernel_herding, eigenvalue_method=direct, stop_when_objective_decreases=True
+[Optimization 1/5] Subset 'airplane': 1006 labeled reference images, 9866 global candidate images, base H=0.893730
+[Optimization 1/5] Subset 'airplane' selected 20 images
+  selected rank 1/open: H gain=0.000885, objective gain=0.000620, P_hat_+=0.948420, image=C:\Users\maxbe\Downloads\DINO-Kernel-Herding\coco\train2017\000000339278.jpg
+  selected rank 2/open: H gain=0.000701, objective gain=0.000576, P_hat_+=0.975256, image=C:\Users\maxbe\Downloads\DINO-Kernel-Herding\coco\train2017\000000435924.jpg
+  selected rank 3/open: H gain=0.000603, objective gain=0.000470, P_hat_+=0.973757, image=C:\Users\maxbe\Downloads\DINO-Kernel-Herding\coco\train2017\000000301574.jpg
+  selected rank 4/open: H gain=0.000546, objective gain=0.000449, P_hat_+=0.980629, image=C:\Users\maxbe\Downloads\DINO-Kernel-Herding\coco\train2017\000000278747.jpg
+  selected rank 5/open: H gain=0.000438, objective gain=0.000424, P_hat_+=0.997241, image=C:\Users\maxbe\Downloads\DINO-Kernel-Herding\coco\train2017\000000096685.jpg
+  selected rank 6/open: H gain=0.000521, objective gain=0.000388, P_hat_+=0.973721, image=C:\Users\maxbe\Downloads\DINO-Kernel-Herding\coco\train2017\000000194438.jpg
+  selected rank 7/open: H gain=0.000424, objective gain=0.000346, P_hat_+=0.984550, image=C:\Users\maxbe\Downloads\DINO-Kernel-Herding\coco\train2017\000000246358.jpg
+  selected rank 8/open: H gain=0.000490, objective gain=0.000333, P_hat_+=0.969155, image=C:\Users\maxbe\Downloads\DINO-Kernel-Herding\coco\train2017\000000135057.jpg
+  selected rank 9/open: H gain=0.000384, objective gain=0.000228, P_hat_+=0.969275, image=C:\Users\maxbe\Downloads\DINO-Kernel-Herding\coco\train2017\000000577398.jpg
+  selected rank 10/open: H gain=0.000393, objective gain=0.000210, P_hat_+=0.963990, image=C:\Users\maxbe\Downloads\DINO-Kernel-Herding\coco\train2017\000000405213.jpg
+  selected rank 11/open: H gain=0.000448, objective gain=0.000182, P_hat_+=0.948166, image=C:\Users\maxbe\Downloads\DINO-Kernel-Herding\coco\train2017\000000295642.jpg
+  selected rank 12/open: H gain=0.000158, objective gain=0.000143, P_hat_+=0.996967, image=C:\Users\maxbe\Downloads\DINO-Kernel-Herding\coco\train2017\000000025685.jpg
+  selected rank 13/open: H gain=0.000333, objective gain=0.000117, P_hat_+=0.957818, image=C:\Users\maxbe\Downloads\DINO-Kernel-Herding\coco\train2017\000000523711.jpg
+  selected rank 14/open: H gain=0.000100, objective gain=0.000096, P_hat_+=0.999295, image=C:\Users\maxbe\Downloads\DINO-Kernel-Herding\coco\train2017\000000250880.jpg
+  selected rank 15/open: H gain=0.000066, objective gain=0.000063, P_hat_+=0.999328, image=C:\Users\maxbe\Downloads\DINO-Kernel-Herding\coco\train2017\000000517230.jpg
+  selected rank 16/open: H gain=0.000059, objective gain=0.000056, P_hat_+=0.999364, image=C:\Users\maxbe\Downloads\DINO-Kernel-Herding\coco\train2017\000000061621.jpg
+  selected rank 17/open: H gain=0.000182, objective gain=0.000045, P_hat_+=0.973045, image=C:\Users\maxbe\Downloads\DINO-Kernel-Herding\coco\train2017\000000043522.jpg
+  selected rank 18/open: H gain=0.000034, objective gain=0.000024, P_hat_+=0.997989, image=C:\Users\maxbe\Downloads\DINO-Kernel-Herding\coco\train2017\000000036783.jpg
+  selected rank 19/open: H gain=0.000099, objective gain=0.000019, P_hat_+=0.984013, image=C:\Users\maxbe\Downloads\DINO-Kernel-Herding\coco\train2017\000000228398.jpg
+  selected rank 20/open: H gain=0.000122, objective gain=0.000004, P_hat_+=0.976681, image=C:\Users\maxbe\Downloads\DINO-Kernel-Herding\coco\train2017\000000533494.jpg
+[Optimization 2/5] Subset 'kite': 1005 labeled reference images, 9866 global candidate images, base H=0.848789
+[Optimization 2/5] Subset 'kite' selected 36 images
+  selected rank 1/open: H gain=0.000866, objective gain=0.000707, P_hat_+=0.968807, image=C:\Users\maxbe\Downloads\DINO-Kernel-Herding\coco\train2017\000000458069.jpg
+  selected rank 2/open: H gain=0.000986, objective gain=0.000659, P_hat_+=0.936703, image=C:\Users\maxbe\Downloads\DINO-Kernel-Herding\coco\train2017\000000523718.jpg
+  selected rank 3/open: H gain=0.000876, objective gain=0.000626, P_hat_+=0.951178, image=C:\Users\maxbe\Downloads\DINO-Kernel-Herding\coco\train2017\000000179960.jpg
+  selected rank 4/open: H gain=0.000612, objective gain=0.000607, P_hat_+=0.998829, image=C:\Users\maxbe\Downloads\DINO-Kernel-Herding\coco\train2017\000000572295.jpg
+  selected rank 5/open: H gain=0.000733, objective gain=0.000543, P_hat_+=0.962739, image=C:\Users\maxbe\Downloads\DINO-Kernel-Herding\coco\train2017\000000418143.jpg
+  selected rank 6/open: H gain=0.000674, objective gain=0.000477, P_hat_+=0.961254, image=C:\Users\maxbe\Downloads\DINO-Kernel-Herding\coco\train2017\000000234349.jpg
+  selected rank 7/open: H gain=0.000534, objective gain=0.000458, P_hat_+=0.984989, image=C:\Users\maxbe\Downloads\DINO-Kernel-Herding\coco\train2017\000000530622.jpg
+  selected rank 8/open: H gain=0.000836, objective gain=0.000421, P_hat_+=0.920394, image=C:\Users\maxbe\Downloads\DINO-Kernel-Herding\coco\train2017\000000370610.jpg
+  selected rank 9/open: H gain=0.000847, objective gain=0.000401, P_hat_+=0.914769, image=C:\Users\maxbe\Downloads\DINO-Kernel-Herding\coco\train2017\000000006539.jpg
+  selected rank 10/open: H gain=0.000516, objective gain=0.000386, P_hat_+=0.974378, image=C:\Users\maxbe\Downloads\DINO-Kernel-Herding\coco\train2017\000000111799.jpg
+  selected rank 11/open: H gain=0.000547, objective gain=0.000341, P_hat_+=0.959551, image=C:\Users\maxbe\Downloads\DINO-Kernel-Herding\coco\train2017\000000532667.jpg
+  selected rank 12/open: H gain=0.000410, objective gain=0.000328, P_hat_+=0.983669, image=C:\Users\maxbe\Downloads\DINO-Kernel-Herding\coco\train2017\000000272171.jpg
+  selected rank 13/open: H gain=0.000400, objective gain=0.000303, P_hat_+=0.980700, image=C:\Users\maxbe\Downloads\DINO-Kernel-Herding\coco\train2017\000000569431.jpg
+  selected rank 14/open: H gain=0.000560, objective gain=0.000286, P_hat_+=0.946720, image=C:\Users\maxbe\Downloads\DINO-Kernel-Herding\coco\train2017\000000149996.jpg
+  selected rank 15/open: H gain=0.000296, objective gain=0.000276, P_hat_+=0.995976, image=C:\Users\maxbe\Downloads\DINO-Kernel-Herding\coco\train2017\000000096054.jpg
+  selected rank 16/open: H gain=0.000358, objective gain=0.000262, P_hat_+=0.980975, image=C:\Users\maxbe\Downloads\DINO-Kernel-Herding\coco\train2017\000000551338.jpg
+  selected rank 17/open: H gain=0.000312, objective gain=0.000233, P_hat_+=0.984308, image=C:\Users\maxbe\Downloads\DINO-Kernel-Herding\coco\train2017\000000044536.jpg
+  selected rank 18/open: H gain=0.000282, objective gain=0.000223, P_hat_+=0.988241, image=C:\Users\maxbe\Downloads\DINO-Kernel-Herding\coco\train2017\000000332781.jpg
+  selected rank 19/open: H gain=0.000293, objective gain=0.000213, P_hat_+=0.984165, image=C:\Users\maxbe\Downloads\DINO-Kernel-Herding\coco\train2017\000000562063.jpg
+  selected rank 20/open: H gain=0.000264, objective gain=0.000201, P_hat_+=0.987526, image=C:\Users\maxbe\Downloads\DINO-Kernel-Herding\coco\train2017\000000190084.jpg
+  selected rank 21/open: H gain=0.000390, objective gain=0.000191, P_hat_+=0.960964, image=C:\Users\maxbe\Downloads\DINO-Kernel-Herding\coco\train2017\000000163412.jpg
+  selected rank 22/open: H gain=0.000240, objective gain=0.000181, P_hat_+=0.988310, image=C:\Users\maxbe\Downloads\DINO-Kernel-Herding\coco\train2017\000000088815.jpg
+  selected rank 23/open: H gain=0.000272, objective gain=0.000159, P_hat_+=0.977676, image=C:\Users\maxbe\Downloads\DINO-Kernel-Herding\coco\train2017\000000568658.jpg
+  selected rank 24/open: H gain=0.000402, objective gain=0.000137, P_hat_+=0.948544, image=C:\Users\maxbe\Downloads\DINO-Kernel-Herding\coco\train2017\000000375902.jpg
+  selected rank 25/open: H gain=0.000205, objective gain=0.000128, P_hat_+=0.984584, image=C:\Users\maxbe\Downloads\DINO-Kernel-Herding\coco\train2017\000000460632.jpg
+  selected rank 26/open: H gain=0.000131, objective gain=0.000113, P_hat_+=0.996353, image=C:\Users\maxbe\Downloads\DINO-Kernel-Herding\coco\train2017\000000552504.jpg
+  selected rank 27/open: H gain=0.000274, objective gain=0.000105, P_hat_+=0.966847, image=C:\Users\maxbe\Downloads\DINO-Kernel-Herding\coco\train2017\000000520471.jpg
+  selected rank 28/open: H gain=0.000604, objective gain=0.000098, P_hat_+=0.903633, image=C:\Users\maxbe\Downloads\DINO-Kernel-Herding\coco\train2017\000000361158.jpg
+  selected rank 29/open: H gain=0.000253, objective gain=0.000070, P_hat_+=0.964073, image=C:\Users\maxbe\Downloads\DINO-Kernel-Herding\coco\train2017\000000258566.jpg
+  selected rank 30/open: H gain=0.000320, objective gain=0.000058, P_hat_+=0.948789, image=C:\Users\maxbe\Downloads\DINO-Kernel-Herding\coco\train2017\000000221665.jpg
+  selected rank 31/open: H gain=0.000248, objective gain=0.000050, P_hat_+=0.961084, image=C:\Users\maxbe\Downloads\DINO-Kernel-Herding\coco\train2017\000000356293.jpg
+  selected rank 32/open: H gain=0.000243, objective gain=0.000032, P_hat_+=0.958781, image=C:\Users\maxbe\Downloads\DINO-Kernel-Herding\coco\train2017\000000045627.jpg
+  selected rank 33/open: H gain=0.000542, objective gain=0.000025, P_hat_+=0.901857, image=C:\Users\maxbe\Downloads\DINO-Kernel-Herding\coco\train2017\000000201209.jpg
+  selected rank 34/open: H gain=0.000136, objective gain=0.000012, P_hat_+=0.975484, image=C:\Users\maxbe\Downloads\DINO-Kernel-Herding\coco\train2017\000000033240.jpg
+  selected rank 35/open: H gain=0.000096, objective gain=0.000006, P_hat_+=0.982345, image=C:\Users\maxbe\Downloads\DINO-Kernel-Herding\coco\train2017\000000413950.jpg
+  selected rank 36/open: H gain=0.000129, objective gain=0.000001, P_hat_+=0.974649, image=C:\Users\maxbe\Downloads\DINO-Kernel-Herding\coco\train2017\000000561692.jpg
+[Optimization 3/5] Subset 'cup': 1358 labeled reference images, 9866 global candidate images, base H=0.913415
+[Optimization 3/5] Subset 'cup' selected 6 images
+  selected rank 1/open: H gain=0.000328, objective gain=0.000165, P_hat_+=0.967909, image=C:\Users\maxbe\Downloads\DINO-Kernel-Herding\coco\train2017\000000411083.jpg
+  selected rank 2/open: H gain=0.000326, objective gain=0.000124, P_hat_+=0.960328, image=C:\Users\maxbe\Downloads\DINO-Kernel-Herding\coco\train2017\000000208548.jpg
+  selected rank 3/open: H gain=0.000197, objective gain=0.000060, P_hat_+=0.973062, image=C:\Users\maxbe\Downloads\DINO-Kernel-Herding\coco\train2017\000000094000.jpg
+  selected rank 4/open: H gain=0.000198, objective gain=0.000046, P_hat_+=0.970110, image=C:\Users\maxbe\Downloads\DINO-Kernel-Herding\coco\train2017\000000186703.jpg
+  selected rank 5/open: H gain=0.000257, objective gain=0.000028, P_hat_+=0.955330, image=C:\Users\maxbe\Downloads\DINO-Kernel-Herding\coco\train2017\000000174011.jpg
+  selected rank 6/open: H gain=0.000121, objective gain=0.000009, P_hat_+=0.977830, image=C:\Users\maxbe\Downloads\DINO-Kernel-Herding\coco\train2017\000000235792.jpg
+[Optimization 4/5] Subset 'laptop': 1154 labeled reference images, 9866 global candidate images, base H=0.887960
+[Optimization 4/5] Subset 'laptop' selected 2 images
+  selected rank 1/open: H gain=0.000413, objective gain=0.000299, P_hat_+=0.977478, image=C:\Users\maxbe\Downloads\DINO-Kernel-Herding\coco\train2017\000000219894.jpg
+  selected rank 2/open: H gain=0.000214, objective gain=0.000069, P_hat_+=0.971424, image=C:\Users\maxbe\Downloads\DINO-Kernel-Herding\coco\train2017\000000260635.jpg
+[Optimization 5/5] Subset 'remote': 1101 labeled reference images, 9866 global candidate images, base H=0.892403
+[Optimization 5/5] Subset 'remote' selected 0 images
+Saved von Neumann optimization selection -> C:\Users\maxbe\Downloads\DINO-Kernel-Herding\saved_vectors\retrain\optimization_selection.csv
+Saved von Neumann optimization summary -> C:\Users\maxbe\Downloads\DINO-Kernel-Herding\saved_vectors\retrain\optimization_summary.csv
+Optimization selected 64 images

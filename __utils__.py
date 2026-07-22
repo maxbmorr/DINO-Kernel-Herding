@@ -132,83 +132,127 @@ def save_vector_split(output_dir, X, label_ids, metadata, class_mapping):
     metadata.to_csv(output_dir / "metadata.csv", index=False)
     class_mapping.to_csv(output_dir / "class_mapping.csv", index=False)
 
-def _three_way_stratified_indices(label_ids, test_size, random_state):
-    if not 0 < test_size < 1:
-        raise ValueError("test_size must be between 0 and 1.")
+def split_DINO_vectors_with_multilabel_training(
+    input_dir="saved_vectors",
+    selected_class_names=None,
+    min_samples_per_class=300,
+    samples_per_class=1000,
+    random_state=42,
+):
+    """Build a leakage-free split with a multi-label quota per training class."""
+    if not selected_class_names:
+        raise ValueError("selected_class_names must contain at least one class.")
+    if samples_per_class <= 0:
+        raise ValueError("samples_per_class must be positive.")
+    if not 0 < min_samples_per_class <= samples_per_class:
+        raise ValueError(
+            "min_samples_per_class must be positive and no greater than "
+            "samples_per_class."
+        )
 
-    rng = np.random.default_rng(random_state)
-    train_indices = []
-    retrain_indices = []
-    test_indices = []
-
-    for label_id in np.unique(label_ids):
-        class_indices = np.where(label_ids == label_id)[0]
-        rng.shuffle(class_indices)
-
-        if len(class_indices) == 1:
-            train_indices.extend(class_indices)
-            continue
-
-        if len(class_indices) == 2:
-            train_indices.append(class_indices[0])
-            retrain_indices.append(class_indices[1])
-            continue
-
-        test_count = max(1, int(round(len(class_indices) * test_size)))
-        test_count = min(test_count, len(class_indices) - 2)
-        non_test_indices = class_indices[test_count:]
-        train_count = len(non_test_indices) // 2
-
-        test_indices.extend(class_indices[:test_count])
-        train_indices.extend(non_test_indices[:train_count])
-        retrain_indices.extend(non_test_indices[train_count:])
-
-    train_indices = np.array(sorted(train_indices))
-    retrain_indices = np.array(sorted(retrain_indices))
-    test_indices = np.array(sorted(test_indices))
-    return train_indices, retrain_indices, test_indices
-
-
-def split_DINO_vectors(input_dir="saved_vectors", test_size=0.2, random_state=42):
     X, label_ids, _, _, metadata, class_mapping = load_DINO_vectors(input_dir)
-    train_indices, retrain_indices, test_indices = _three_way_stratified_indices(
-        label_ids,
-        test_size,
-        random_state,
+    if "all_label_names" not in metadata.columns:
+        raise ValueError("Multi-label sampling requires metadata.all_label_names.")
+
+    label_sets = metadata["all_label_names"].fillna("").astype(str).map(
+        lambda value: set(value.split("|")) if value else set()
+    )
+    rng = np.random.default_rng(random_state)
+    sampled_by_class = {}
+    training_indices = set()
+    selected_name_set = set(selected_class_names)
+    eligible_by_class = {
+        class_name: np.array(
+            [
+                index
+                for index, labels in enumerate(label_sets)
+                if class_name in labels
+                and len(labels & selected_name_set) == 1
+            ],
+            dtype=int,
+        )
+        for class_name in selected_class_names
+    }
+    empty_classes = [
+        class_name
+        for class_name, eligible in eligible_by_class.items()
+        if len(eligible) == 0
+    ]
+    if empty_classes:
+        raise ValueError(
+            "Selected classes have no eligible images: " + ", ".join(empty_classes)
+        )
+    balanced_sample_count = min(
+        samples_per_class,
+        min(len(eligible) for eligible in eligible_by_class.values()),
+    )
+    if balanced_sample_count < min_samples_per_class:
+        raise ValueError(
+            f"The selected class set supports only {balanced_sample_count} "
+            f"balanced images per class; at least {min_samples_per_class} "
+            "are required."
+        )
+
+    for class_name, eligible in eligible_by_class.items():
+        chosen = rng.choice(
+            eligible, size=balanced_sample_count, replace=False
+        )
+        sampled_by_class[class_name] = chosen
+        training_indices.update(chosen.tolist())
+
+    train_indices = np.array(sorted(training_indices), dtype=int)
+    remaining_mask = np.ones(len(X), dtype=bool)
+    remaining_mask[train_indices] = False
+    remaining_indices = np.flatnonzero(remaining_mask)
+
+    retrain_count = min(2 * len(train_indices), len(remaining_indices))
+    target_test_count = min(
+        2 * retrain_count,
+        len(remaining_indices) - retrain_count,
+    )
+    retrain_indices = np.sort(
+        rng.choice(remaining_indices, size=retrain_count, replace=False)
+    )
+    retrain_mask = np.zeros(len(X), dtype=bool)
+    retrain_mask[retrain_indices] = True
+    test_pool = remaining_indices[~retrain_mask[remaining_indices]]
+    test_indices = np.sort(
+        rng.choice(test_pool, size=target_test_count, replace=False)
+    )
+    unused_count = len(test_pool) - len(test_indices)
+    actual_test_positive = sum(
+        bool(label_sets.iloc[index] & selected_name_set)
+        for index in test_indices
     )
 
     input_dir = Path(input_dir)
     if not input_dir.is_absolute():
         input_dir = PROJECT_ROOT / input_dir
+    for split_name, indices in (
+        ("train", train_indices),
+        ("retrain", retrain_indices),
+        ("test", test_indices),
+    ):
+        save_vector_split(
+            input_dir / split_name,
+            X[indices],
+            label_ids[indices],
+            metadata.iloc[indices].reset_index(drop=True),
+            class_mapping,
+        )
 
-    train_dir = input_dir / "train"
-    retrain_dir = input_dir / "retrain"
-    test_dir = input_dir / "test"
-
-    save_vector_split(
-        train_dir,
-        X[train_indices],
-        label_ids[train_indices],
-        metadata.iloc[train_indices].reset_index(drop=True),
-        class_mapping
+    print(
+        f"Multi-label train split: {len(train_indices)} unique images "
+        f"using {balanced_sample_count} images per class "
+        f"(balanced, cap={samples_per_class})"
     )
-    save_vector_split(
-        retrain_dir,
-        X[retrain_indices],
-        label_ids[retrain_indices],
-        metadata.iloc[retrain_indices].reset_index(drop=True),
-        class_mapping
+    for class_name, indices in sampled_by_class.items():
+        print(f"  {class_name}: {len(indices)} sampled images")
+    print(f"Random retrain split: {len(retrain_indices)} images (2x training)")
+    print(f"Random test split: {len(test_indices)} images (2x retraining)")
+    print(
+        f"Test images containing a selected class: {actual_test_positive}/"
+        f"{len(test_indices)} ({actual_test_positive / len(test_indices):.1%})"
     )
-    save_vector_split(
-        test_dir,
-        X[test_indices],
-        label_ids[test_indices],
-        metadata.iloc[test_indices].reset_index(drop=True),
-        class_mapping
-    )
-
-    print(f"Train split: {len(train_indices)} images -> {train_dir}")
-    print(f"Retrain split: {len(retrain_indices)} images -> {retrain_dir}")
-    print(f"Test split: {len(test_indices)} images -> {test_dir}")
-
+    print(f"Unused images: {unused_count}")
     return train_indices, retrain_indices, test_indices

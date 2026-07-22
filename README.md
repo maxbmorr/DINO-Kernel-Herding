@@ -5,18 +5,23 @@ For CNiEL research 2026 for the Dr. Austin Brockmeier.  This is my primary proje
 
 The current pipeline starts in `main.py`.
 
+The configured input is the complete annotated COCO 2017 training set:
+
+```text
+coco/train2017/                                      118,287 images
+coco/annotations/instances_train2017.json
+```
+
 The active learning classifier is a DINO-embedding classifier in `embedding_classifier.py`. It learns only from labeled images in `saved_vectors/train/`, while `saved_vectors/test/` remains the final test fold.
 
-The DINO vector pipeline is still available, but it is behind flags in `main.py`:
+`main.py` retains only three experiment switches:
 
-- `CREATE_DINO_DATASET`: creates DINO feature vectors from COCO or class-folder images.
-- `SPLIT_DINO_DATASET`: creates stratified train/retrain/test vector folders.
-- `RUN_EMBEDDING_CLASSIFIER`: trains and tests a classifier using labeled DINO vectors.
-- `RUN_SUBSET_PROBABILITY`: estimates calibrated multi-label membership probability for each target image and class/subset.
-- `RUN_OPTIMIZATION`: selects target images using a von Neumann entropy objective with a log-probability term.
-- `RUN_EXPORT_SELECTED_IMAGES`: copies selected target images into organized review folders.
-- `RUN_SURPRISAL_TRADEOFF_EVALUATION`: runs the class/lambda surprisal trade-off sweep and exports visual comparison folders.
-- `RUN_LAMBDA_SELECTION_ACCURACY_EVALUATION`: uses true labels after selection to generate lambda accuracy CSVs and graphs.
+- `CREATE_DINO_DATASET`: creates DINO feature vectors before the experiment.
+- `USE_KERNEL_HERDED_REFERENCES`: toggles kernel-herded reference compression.
+- `USE_SECULAR_EIGENVALUE_UPDATES`: toggles experimental secular updates.
+
+Splitting, hyperparameter selection, calibrated scoring, optimization,
+retraining, export, and final AUC evaluation run automatically in that order.
 
 ## Dependencies
 
@@ -122,9 +127,23 @@ It uses DINO vectors that were already created from labeled images. The usual fl
 python main.py
 ```
 
-The stratified split first reserves 20% for final testing, then divides the
-remaining data evenly between train and retrain. For ordinary classes this is
-approximately a 40%/40%/20% split:
+The proof-of-concept split is controlled by `CLASS_COUNT`. Each run randomly
+chooses that many classes with at least 300 usable images each. Every chosen
+class contributes the same number of multi-label-positive images. That balanced
+quota is between 300 and 1,000 and is determined by the available count of the
+least-populated selected class. To keep the final positive counts exactly equal, a training
+image may contain only one of the five selected classes, although it may still
+contain any number of non-selected COCO classes. Duplicate images are stored
+once.
+
+```text
+retrain size = 2 * unique training size
+test size = 2 * retrain size
+```
+
+Retrain and test rows are sampled randomly without replacement, the three sets
+are disjoint, and unused COCO images remain outside all splits. The test set has
+no forced selected-class composition and no positive-image reservation:
 
 ```text
 saved_vectors/train/    original labeled training data
@@ -176,39 +195,22 @@ For each class, the pipeline:
 - tunes `C` again, mines hard negatives, and refits the final logistic classifier on the complete train set
 - derives a class-specific threshold targeting 80% precision
 
-The regularization search grid is:
+The main pipeline selects one global `C` jointly with lambda and selected-data
+trust using the original-training cross-validation sweep. Its initial grid is:
 
 ```python
-REGULARIZATION_C_VALUES = [0.001, 0.01, 0.1, 1.0, 10.0]
+C_VALUES = [0.0001, 0.001, 0.01, 0.1, 1.0, 10.0]
 ```
 
-Smaller `C` values apply stronger regularization. Each class selects its own
-value using nested cross-validated log loss, which penalizes confident incorrect
-predictions. This changes the calibrated probability input but does not change
-the entropy objective, candidate set, or greedy optimization algorithm.
+Smaller `C` values apply stronger regularization. If the raw optimum is on a
+`C` boundary, the grid expands automatically by another decade and continues.
+The selected global `C` is then used by all final out-of-fold-calibrated class
+models. There is no separate `TUNE_CLASSIFIER_REGULARIZATION` switch or
+`FIXED_CLASSIFIER_C` override in `main.py`, preventing a second tuning mechanism
+from disagreeing with the joint hyperparameter sweep.
 
-Regularization tuning can be disabled in `main.py` when faster probability
-model fitting is more important:
-
-```python
-TUNE_CLASSIFIER_REGULARIZATION = True
-FIXED_CLASSIFIER_C = 1.0
-```
-
-When tuning is `True`, each class uses the nested log-loss search described
-above. When it is `False`, all outer-fold classifiers and the final classifier
-use `FIXED_CLASSIFIER_C`; five-fold out-of-fold calibration still runs. Fixed
-mode therefore preserves probability calibration while avoiding the inner
-regularization searches. Changing this switch affects probability estimates,
-not the downstream entropy optimization formula.
-
-Hard-negative mining is configured in `main.py`:
-
-```python
-USE_HARD_NEGATIVE_MINING = True
-HARD_NEGATIVE_FRACTION = 0.1
-HARD_NEGATIVE_WEIGHT = 3.0
-```
+Hard-negative mining is disabled in the fixed `main.py` pipeline, and its old
+top-level controls have been removed.
 
 For each class, `HARD_NEGATIVE_FRACTION` selects that fraction of true
 negative training images with the largest initial decision scores.
@@ -308,6 +310,68 @@ predicted folder assignment. This export reads test embeddings and image paths,
 but does not use true test labels or calculate accuracy, calibration, or model
 comparison metrics.
 
+After both models are saved, `main.py` automatically compares them using the
+true multi-label annotations of the untouched test fold. The evaluator can
+also be rerun independently with:
+
+```powershell
+python evaluate_dual_model_auc.py
+```
+
+This writes completely separate macro- and micro-ROC graphs and supporting AUC
+tables to:
+
+```text
+_organized_calibrated_images/AUC_evaluation/auc_macro.png
+_organized_calibrated_images/AUC_evaluation/auc_micro.png
+_organized_calibrated_images/AUC_evaluation/auc_summary.csv
+_organized_calibrated_images/AUC_evaluation/auc_per_class.csv
+```
+
+Classes without both a positive and negative test example are excluded because
+ROC AUC is undefined for those classes.
+
+The paired bootstrap test has been removed.
+
+## Hyperparameter sweep and sensitivity
+
+Run `python hyperparameter_sweep.py` to sweep lambda, the selected/re-labeled
+data trust weight, and logistic-regression L2 inverse regularization `C`.
+Trust is searched logarithmically from `0.001` through `1.0`; `C` is searched
+from `0.0001` through `10.0` to cover stronger L2 regularization after the
+previous optimum landed on the lower boundary. Lambda, trust, and `C` are all
+shown on logarithmic sensitivity axes. The saved best-parameter record flags
+any raw optimum that still lands on a grid boundary so the range can be
+expanded again before drawing a final conclusion.
+For `C`, expansion is automatic: if the raw highest-mean-macro-AUC setting is
+the current minimum or maximum, the sweep adds another decade in that direction
+and evaluates it. This repeats until the raw optimum is interior. Every baseline
+fit, progress update, and final selection prints the active `C`. A bounded
+safety guard raises an error after eight consecutive boundary expansions rather
+than allowing an accidental endless search.
+Selection uses three-fold cross-validation entirely within the original
+training set. Each fold contains labeled-base, simulated-unlabeled candidate,
+and untouched validation roles. The real retrain and test labels are not used
+to choose hyperparameters. The combination with the highest mean macro AUC is
+used to define a one-standard-error acceptance threshold. Among configurations
+within one standard error of that maximum, the sweep chooses the safer option:
+lower selected-data trust, smaller `C` (stronger L2 regularization), lambda
+closer to the positive grid's logarithmic center, and fewer selected images.
+Macro and then micro AUC break any remaining tie. Both the raw maximum and the
+one-standard-error selection are saved for auditing.
+
+Each `(fold, C)` baseline is fully out-of-fold calibrated so lambda always
+multiplies the same calibrated `log(P)` quantity used by the final optimizer.
+Trust-weight variants use lightweight logistic models because macro AUC depends
+on within-class ranking; the winning final model is fully calibrated. Baseline
+fits, candidate probabilities, fold transforms, and lambda selections are
+reused wherever their inputs do not change. Every completed combination is
+checkpointed and the console reports completion percentage and estimated time
+remaining.
+
+Results, the selected configuration, and one-at-a-time sensitivity graphs are
+written under `_hyperparameter_sensitivity/`.
+
 Important columns in `subset_probability_scores.csv`:
 
 - `path`: image path
@@ -392,20 +456,19 @@ delta H_vN(x | S) + lambda * log(P_hat_+(x)) > 0
 Selection stops for the class when even the best remaining candidate has zero
 or negative combined gain.
 
-The main controls are in `main.py`:
+The remaining optimization controls in `main.py` are:
 
 ```python
-OPTIMIZATION_SELECTION_COUNT = 5
-OPTIMIZATION_PROBABILITY_LAMBDA = 0.005
-OPTIMIZATION_KERNEL = "rbf"
-OPTIMIZATION_STOP_WHEN_OBJECTIVE_DECREASES = True
 USE_KERNEL_HERDED_REFERENCES = True
-KERNEL_HERDED_REFERENCE_COUNT = 50
+KERNEL_HERDED_REFERENCE_COUNT = 100
 USE_SECULAR_EIGENVALUE_UPDATES = False
 ```
 
+Selection is always open-ended with a positive-objective-gain stop, uses the
+RBF kernel, and receives lambda from the cross-validated sweep.
+
 When `USE_KERNEL_HERDED_REFERENCES` is enabled, known learning labels first
-define each class subset. Kernel herding then compresses that subset to 50
+define each class subset. Kernel herding then compresses that subset to 100
 representative DINO embeddings by greedily matching its kernel mean. All von
 Neumann entropy and candidate calculations use this herded reference coreset.
 True retrain labels are not used during selection.
@@ -501,8 +564,8 @@ The main controls are at the top of `evaluate_surprisal_tradeoff.py`:
 
 ```python
 TARGET_CLASSES = []  # every calibrated class
-SURPRISAL_LAMBDAS = [0.0, 0.001, 0.005, 0.01, 0.025]
-SELECTION_COUNT = 4
+SURPRISAL_LAMBDAS = [0.001, 0.005, 0.01, 0.025]
+SELECTION_COUNT = None
 KERNEL = "rbf"
 USE_KERNEL_HERDED_REFERENCES = True
 USE_SECULAR_EIGENVALUE_UPDATES = False

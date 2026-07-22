@@ -1,46 +1,32 @@
 import random
+import secrets
+
+import pandas as pd
 
 import __utils__ as ut
 import dual_model_calibration as dmc
-import embedding_classifier as ec
-import evaluate_lambda_selection_accuracy as lambda_accuracy_eval
-import evaluate_surprisal_tradeoff as tradeoff_eval
+import evaluate_dual_model_auc as dual_auc
 import export_calibrated_images as calibrated_exporter
 import export_selected_images as exporter
+import hyperparameter_sweep as hp_sweep
 import optimization as opt
 import subset_probability as sp
 
 
-# Pipeline stages
-CREATE_DINO_DATASET = True
-SPLIT_DINO_DATASET = True
-RUN_EMBEDDING_CLASSIFIER = True
-RUN_SUBSET_PROBABILITY = True
-RUN_OPTIMIZATION = True
-RUN_EXPORT_SELECTED_IMAGES = True
-RUN_SURPRISAL_TRADEOFF_EVALUATION = False
-RUN_LAMBDA_SELECTION_ACCURACY_EVALUATION = False
+# Retained experiment switches
+CREATE_DINO_DATASET = False
 
 # COCO input
-COCO_IMAGE_DIR = "coco/val2017"
-COCO_ANNOTATION_PATH = "coco/annotations/instances_val2017.json"
-REMOVE_IMAGE_BACKGROUNDS = False
+COCO_IMAGE_DIR = "coco/train2017"
+COCO_ANNOTATION_PATH = "coco/annotations/instances_train2017.json"
 
-# Three-way split: reserve test, then divide the remainder into train/retrain
-TEST_SPLIT_SIZE = 0.2
+# Proof-of-concept class subset. Each run records its generated seed.
+CLASS_COUNT = 5
 
-# Probability classifier
-TUNE_CLASSIFIER_REGULARIZATION = False
-FIXED_CLASSIFIER_C = 1.0
-USE_HARD_NEGATIVE_MINING = True
-HARD_NEGATIVE_FRACTION = 0.2
-HARD_NEGATIVE_WEIGHT = 5.0
-
-# Subset optimization
-OPTIMIZATION_SELECTION_COUNT = 8
-OPTIMIZATION_PROBABILITY_LAMBDA = 0.005
-OPTIMIZATION_KERNEL = "rbf"  # "cosine" or "rbf"
-OPTIMIZATION_STOP_WHEN_OBJECTIVE_DECREASES = True
+# Fixed proof-of-concept sampling cap (classes with fewer images use all of them).
+_MIN_TRAIN_IMAGES_PER_CLASS = 300
+_MAX_TRAIN_IMAGES_PER_CLASS = 1000
+_MAX_CLASS_SELECTION_ATTEMPTS = 1000
 
 # Labeled reference representation
 USE_KERNEL_HERDED_REFERENCES = True
@@ -60,83 +46,139 @@ def _eigenvalue_method():
     return "secular" if USE_SECULAR_EIGENVALUE_UPDATES else "direct"
 
 
-def run_pipeline():
-    baseline_model = None
+def _random_selected_classes():
+    metadata = pd.read_csv(ut.PROJECT_ROOT / "saved_vectors" / "metadata.csv")
+    label_lists = metadata["all_label_names"].fillna("").astype(str).str.split("|")
+    counts = {}
+    for labels in label_lists:
+        for class_name in set(labels):
+            if class_name:
+                counts[class_name] = counts.get(class_name, 0) + 1
+    available_classes = sorted(
+        name
+        for name, count in counts.items()
+        if count >= _MIN_TRAIN_IMAGES_PER_CLASS
+    )
+    if CLASS_COUNT > len(available_classes):
+        raise ValueError(
+            f"CLASS_COUNT={CLASS_COUNT} exceeds the "
+            f"{len(available_classes)} available classes."
+        )
+    selection_seed = secrets.randbits(32)
+    rng = random.Random(selection_seed)
+    for attempt in range(1, _MAX_CLASS_SELECTION_ATTEMPTS + 1):
+        selected = rng.sample(available_classes, CLASS_COUNT)
+        selected_set = set(selected)
+        usable_counts = {
+            class_name: sum(
+                class_name in labels and len(set(labels) & selected_set) == 1
+                for labels in label_lists
+            )
+            for class_name in selected
+        }
+        if min(usable_counts.values()) >= _MIN_TRAIN_IMAGES_PER_CLASS:
+            break
+    else:
+        raise RuntimeError(
+            "Could not find a random class set with at least "
+            f"{_MIN_TRAIN_IMAGES_PER_CLASS} usable images per class after "
+            f"{_MAX_CLASS_SELECTION_ATTEMPTS} attempts."
+        )
+    selection_manifest = pd.DataFrame({
+        "random_seed": [selection_seed] * len(selected),
+        "label_name": selected,
+    })
+    selection_manifest.to_csv(
+        ut.PROJECT_ROOT / "saved_vectors" / "selected_classes.csv", index=False
+    )
+    print(
+        f"Selected proof-of-concept classes (seed={selection_seed}, "
+        f"attempt={attempt}):"
+    )
+    print(", ".join(selected))
+    print(
+        "Usable images before balancing: "
+        + ", ".join(
+            f"{class_name}={usable_counts[class_name]}"
+            for class_name in selected
+        )
+    )
+    return selected, selection_seed
 
+
+def run_pipeline():
     if CREATE_DINO_DATASET:
         vectors, labels, paths, classes = ut.create_dataset(
             data_location=COCO_IMAGE_DIR,
             annotation_path=COCO_ANNOTATION_PATH,
-            bckgnd_rmv=REMOVE_IMAGE_BACKGROUNDS,
+            bckgnd_rmv=False,
         )
         print("Vector shape:", vectors.shape)
         print("Label shape:", labels.shape)
         print("Class count:", len(classes))
         print("Image count:", len(paths))
 
-    if SPLIT_DINO_DATASET:
-        ut.split_DINO_vectors(
-            "saved_vectors",
-            test_size=TEST_SPLIT_SIZE,
-            random_state=int(100 * random.random()),
-        )
+    selected_classes, selection_seed = _random_selected_classes()
+    ut.split_DINO_vectors_with_multilabel_training(
+        "saved_vectors",
+        selected_class_names=selected_classes,
+        min_samples_per_class=_MIN_TRAIN_IMAGES_PER_CLASS,
+        samples_per_class=_MAX_TRAIN_IMAGES_PER_CLASS,
+        random_state=selection_seed,
+    )
 
-    if RUN_EMBEDDING_CLASSIFIER:
-        ec.train_and_evaluate(
-            learning_dir="saved_vectors/train",
-            testing_dir="saved_vectors/test",
-        )
+    best, _, _ = hp_sweep.run_hyperparameter_sweep("saved_vectors/train")
+    fixed_c = float(best["C"])
+    probability_lambda = float(best["lambda"])
+    selected_data_weight = float(best["selected_data_weight"])
+    print(
+        "Applying selected hyperparameters: "
+        f"lambda={probability_lambda:g}, "
+        f"trust={selected_data_weight:g}, C={fixed_c:g}"
+    )
 
-    if RUN_SUBSET_PROBABILITY:
-        baseline_model, _, _ = sp.score_directory(
-            learning_dir="saved_vectors/train",
-            target_dir="saved_vectors/retrain",
-            tune_regularization=TUNE_CLASSIFIER_REGULARIZATION,
-            fixed_c=FIXED_CLASSIFIER_C,
-            use_hard_negative_mining=USE_HARD_NEGATIVE_MINING,
-            hard_negative_fraction=HARD_NEGATIVE_FRACTION,
-            hard_negative_weight=HARD_NEGATIVE_WEIGHT,
-        )
+    baseline_model, _, _ = sp.score_directory(
+        learning_dir="saved_vectors/train",
+        target_dir="saved_vectors/retrain",
+        tune_regularization=False,
+        fixed_c=fixed_c,
+        use_hard_negative_mining=False,
+        selected_class_names=selected_classes,
+    )
 
-    if RUN_OPTIMIZATION:
-        opt.optimize_subset_selection(
-            learning_dir="saved_vectors/train",
-            target_dir="saved_vectors/retrain",
-            selection_count=OPTIMIZATION_SELECTION_COUNT,
-            probability_lambda=OPTIMIZATION_PROBABILITY_LAMBDA,
-            kernel=OPTIMIZATION_KERNEL,
-            stop_when_objective_decreases=(
-                OPTIMIZATION_STOP_WHEN_OBJECTIVE_DECREASES
-            ),
-            reference_method=_reference_method(),
-            max_labeled_reference_per_subset=KERNEL_HERDED_REFERENCE_COUNT,
-            eigenvalue_method=_eigenvalue_method(),
-        )
+    opt.optimize_subset_selection(
+        learning_dir="saved_vectors/train",
+        target_dir="saved_vectors/retrain",
+        selection_count=None,
+        probability_lambda=probability_lambda,
+        kernel="rbf",
+        stop_when_objective_decreases=True,
+        reference_method=_reference_method(),
+        max_labeled_reference_per_subset=KERNEL_HERDED_REFERENCE_COUNT,
+        eigenvalue_method=_eigenvalue_method(),
+        selected_class_names=selected_classes,
+    )
 
     model_0, model_1 = dmc.calibrate_baseline_and_augmented_models(
         training_dir="saved_vectors/train",
         retraining_dir="saved_vectors/retrain",
-        tune_regularization=TUNE_CLASSIFIER_REGULARIZATION,
-        fixed_c=FIXED_CLASSIFIER_C,
-        use_hard_negative_mining=USE_HARD_NEGATIVE_MINING,
-        hard_negative_fraction=HARD_NEGATIVE_FRACTION,
-        hard_negative_weight=HARD_NEGATIVE_WEIGHT,
+        tune_regularization=False,
+        fixed_c=fixed_c,
+        use_hard_negative_mining=False,
         baseline_model=baseline_model,
+        selected_class_names=selected_classes,
+        selected_data_weight=selected_data_weight,
     )
     calibrated_exporter.export_calibrated_test_images(
         model_0,
         model_1,
         test_dir="saved_vectors/test",
     )
+    dual_auc.evaluate_dual_model_auc(
+        test_dir="saved_vectors/test",
+    )
 
-    if RUN_EXPORT_SELECTED_IMAGES:
-        exporter.export_selected_images()
-
-    if RUN_SURPRISAL_TRADEOFF_EVALUATION:
-        tradeoff_eval.run_surprisal_tradeoff_evaluation()
-
-    if RUN_LAMBDA_SELECTION_ACCURACY_EVALUATION:
-        lambda_accuracy_eval.evaluate_lambda_selection_accuracy()
+    exporter.export_selected_images()
 
 
 if __name__ == "__main__":

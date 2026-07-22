@@ -1,4 +1,5 @@
 from pathlib import Path
+from time import perf_counter
 
 import numpy as np
 import pandas as pd
@@ -253,7 +254,12 @@ def greedy_maximize_von_neumann_entropy(
     probability_lambda=0.01,
     stop_when_objective_decreases=True,
     eigenvalue_method="direct",
+    progress_label=None,
 ):
+    if probability_lambda <= 0:
+        raise ValueError(
+            "probability_lambda must be positive so subset trust is enforced."
+        )
     if eigenvalue_method not in {"direct", "secular"}:
         raise ValueError("eigenvalue_method must be 'direct' or 'secular'.")
 
@@ -275,7 +281,21 @@ def greedy_maximize_von_neumann_entropy(
     current_log_probability_sum = 0.0
     current_objective = current_entropy
 
-    for rank in range(selection_count):
+    selection_limit = (
+        len(candidate_indices) if selection_count is None
+        else min(selection_count, len(candidate_indices))
+    )
+    for rank in range(selection_limit):
+        remaining_count = len(candidate_indices) - len(selected_candidate_positions)
+        round_started = perf_counter()
+        report_every = max(1, int(np.ceil(remaining_count / 10)))
+        evaluated_count = 0
+        if progress_label is not None:
+            print(
+                f"[{progress_label}] selection round {rank + 1}: "
+                f"evaluating {remaining_count} remaining candidates",
+                flush=True,
+            )
         if eigenvalue_method == "secular":
             current_eigenvalues, current_eigenvectors = np.linalg.eigh(
                 current_kernel
@@ -355,9 +375,36 @@ def greedy_maximize_von_neumann_entropy(
                 best_gain = objective_gain
                 best_log_probability = log_probability
 
+            evaluated_count += 1
+            if progress_label is not None and (
+                evaluated_count % report_every == 0
+                or evaluated_count == remaining_count
+            ):
+                elapsed = perf_counter() - round_started
+                fraction = evaluated_count / remaining_count
+                eta = elapsed * (1.0 - fraction) / max(fraction, 1e-12)
+                print(
+                    f"[{progress_label}] round {rank + 1}: "
+                    f"{evaluated_count}/{remaining_count} candidates "
+                    f"({100 * fraction:.0f}%), elapsed={elapsed:.1f}s, "
+                    f"ETA={eta:.1f}s",
+                    flush=True,
+                )
+
         if best_position is None:
+            if progress_label is not None:
+                print(
+                    f"[{progress_label}] stopped: no candidate remained.",
+                    flush=True,
+                )
             break
         if stop_when_objective_decreases and best_gain <= 0.0:
+            if progress_label is not None:
+                print(
+                    f"[{progress_label}] stopped after {rank} selections: "
+                    f"best remaining objective gain={best_gain:.8f} is not positive.",
+                    flush=True,
+                )
             break
 
         selected_candidate_positions.append(best_position)
@@ -401,6 +448,14 @@ def greedy_maximize_von_neumann_entropy(
         current_entropy = best_entropy
         current_log_probability_sum += best_log_probability
         current_objective = best_objective
+        if progress_label is not None:
+            print(
+                f"[{progress_label}] accepted selection {rank + 1}: "
+                f"objective gain={best_gain:.8f}, "
+                f"entropy gain={selected_indices[-1]['von_neumann_entropy_gain']:.8f}, "
+                f"round time={perf_counter() - round_started:.1f}s",
+                flush=True,
+            )
 
     return selected_indices
 
@@ -410,7 +465,7 @@ def optimize_subset_selection(
     target_dir="saved_vectors/retrain",
     probability_scores_path=None,
     probability_matrix_path=None,
-    selection_count=4,
+    selection_count=None,
     probability_lambda=0.01,
     kernel="rbf",
     stop_when_objective_decreases=True,
@@ -418,6 +473,8 @@ def optimize_subset_selection(
     max_candidate_pool_per_subset=None,
     max_labeled_reference_per_subset=200,
     reference_method="all",
+    selected_class_names=None,
+    allowed_candidate_indices=None,
 ):
     learning_dir = _resolve_path(learning_dir)
     target_dir = _resolve_path(target_dir)
@@ -467,6 +524,10 @@ def optimize_subset_selection(
         for _, class_row in class_mapping.iterrows()
         if f"{class_row['label_name']}_positive_probability"
         in probability_matrix.columns
+        and (
+            selected_class_names is None
+            or class_row["label_name"] in selected_class_names
+        )
     ]
     print(
         f"Running global von Neumann optimization for "
@@ -479,11 +540,6 @@ def optimize_subset_selection(
         f"eigenvalue_method={eigenvalue_method}, "
         f"stop_when_objective_decreases={stop_when_objective_decreases}"
     )
-    if probability_lambda == 0:
-        print(
-            "Warning: lambda is 0, so P_hat_+(x) is reported but not used "
-            "as a soft penalty. The optimizer is maximizing entropy only."
-        )
 
     for class_number, class_row in enumerate(optimization_rows, start=1):
         label_id = int(class_row["label_id"])
@@ -505,6 +561,11 @@ def optimize_subset_selection(
                 probability_column
             ].to_numpy(),
         })
+        if allowed_candidate_indices is not None:
+            allowed = np.asarray(allowed_candidate_indices, dtype=int)
+            candidate_scores = candidate_scores[
+                candidate_scores["target_index"].isin(allowed)
+            ].reset_index(drop=True)
 
         if len(candidate_scores) == 0:
             print(
@@ -543,12 +604,15 @@ def optimize_subset_selection(
             candidate_positive_probabilities=candidate_scores[
                 "positive_probability"
             ].to_numpy(),
-            selection_count=min(selection_count, len(candidate_indices)),
+            selection_count=selection_count,
             kernel=kernel,
             gamma=gamma,
             probability_lambda=probability_lambda,
             stop_when_objective_decreases=stop_when_objective_decreases,
             eigenvalue_method=eigenvalue_method,
+            progress_label=(
+                f"Optimization {class_number}/{len(optimization_rows)}: {class_name}"
+            ),
         )
         print(
             f"[Optimization {class_number}/{len(optimization_rows)}] "
@@ -561,7 +625,7 @@ def optimize_subset_selection(
             metadata_row = target_metadata.iloc[target_index].to_dict()
             print(
                 f"  selected rank {selected_item['optimization_rank']}/"
-                f"{selection_count}: "
+                f"{selection_count if selection_count is not None else 'open'}: "
                 f"H gain={selected_item['von_neumann_entropy_gain']:.6f}, "
                 f"objective gain={selected_item['objective_gain']:.6f}, "
                 f"P_hat_+={probability_matrix.loc[target_index, probability_column]:.6f}, "
