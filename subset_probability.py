@@ -4,11 +4,12 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import average_precision_score, brier_score_loss, precision_recall_curve
+from sklearn.metrics import average_precision_score, brier_score_loss, roc_curve
 from sklearn.model_selection import GridSearchCV, StratifiedKFold
 from sklearn.preprocessing import StandardScaler
 
 import __utils__ as ut
+from progress import ProgressBar
 
 
 REGULARIZATION_C_VALUES = [0.001, 0.01, 0.1, 1.0, 10.0]
@@ -63,21 +64,21 @@ def _expected_calibration_error(y_true, probabilities, bins=10):
     return float(error)
 
 
-def _precision_threshold(y_true, probabilities, target_precision):
-    precision, recall, thresholds = precision_recall_curve(y_true, probabilities)
-    eligible = np.flatnonzero(precision[:-1] >= target_precision)
-    if len(eligible):
-        best = eligible[np.argmax(recall[eligible])]
-        return float(thresholds[best])
-
-    denominator = precision[:-1] + recall[:-1]
-    f1 = np.divide(
-        2 * precision[:-1] * recall[:-1],
-        denominator,
-        out=np.zeros_like(denominator),
-        where=denominator > 0,
+def _balanced_accuracy_threshold(y_true, probabilities):
+    false_positive_rate, true_positive_rate, thresholds = roc_curve(
+        y_true, probabilities
     )
-    return float(thresholds[np.argmax(f1)])
+    finite = np.isfinite(thresholds)
+    if not finite.any():
+        return 0.5
+    # Balanced accuracy = (TPR + TNR) / 2, so maximizing it is equivalent
+    # to maximizing Youden's J = TPR - FPR.
+    scores = true_positive_rate[finite] - false_positive_rate[finite]
+    candidates = thresholds[finite]
+    best_score = scores.max()
+    tied = np.flatnonzero(np.isclose(scores, best_score))
+    best = tied[np.argmin(np.abs(candidates[tied] - 0.5))]
+    return float(candidates[best])
 
 
 def _fit_tuned_classifier(X, y, random_state, sample_weight=None):
@@ -143,7 +144,6 @@ def _refit_with_hard_negatives(
 def fit_calibrated_classifier(
     X,
     y,
-    target_precision=0.8,
     random_state=42,
     tune_regularization=True,
     fixed_c=1.0,
@@ -227,7 +227,7 @@ def fit_calibrated_classifier(
     calibrated = calibrator.predict_proba(
         out_of_fold_scores.reshape(-1, 1)
     )[:, 1]
-    threshold = _precision_threshold(y, calibrated, target_precision)
+    threshold = _balanced_accuracy_threshold(y, calibrated)
 
     if tune_regularization:
         classifier, selected_c = _fit_tuned_classifier(
@@ -285,6 +285,7 @@ def fit_calibrated_classifier(
         ),
         "final_hard_negative_count": final_hard_negative_count,
         "threshold": threshold,
+        "threshold_selection": "out_of_fold_max_balanced_accuracy",
         "brier_score": brier_score_loss(y, calibrated),
         "expected_calibration_error": _expected_calibration_error(
             y, calibrated
@@ -297,7 +298,6 @@ def fit_calibrated_classifier(
 def fit_subset_probability_model(
     learning_dir="saved_vectors/train",
     min_class_samples=6,
-    target_precision=0.8,
     tune_regularization=True,
     fixed_c=1.0,
     use_hard_negative_mining=False,
@@ -320,7 +320,6 @@ def fit_subset_probability_model(
         metadata,
         class_mapping,
         min_class_samples=min_class_samples,
-        target_precision=target_precision,
         tune_regularization=tune_regularization,
         fixed_c=fixed_c,
         use_hard_negative_mining=use_hard_negative_mining,
@@ -334,7 +333,6 @@ def fit_subset_probability_model_from_data(
     metadata,
     class_mapping,
     min_class_samples=6,
-    target_precision=0.8,
     tune_regularization=True,
     fixed_c=1.0,
     use_hard_negative_mining=False,
@@ -359,7 +357,7 @@ def fit_subset_probability_model_from_data(
     class_names = []
     classifiers_by_class = {}
     metric_rows = []
-    print(f"Fitting calibrated multi-label models for {len(class_mapping)} classes")
+    progress = ProgressBar(len(class_mapping), "Calibrating class models")
 
     for class_number, class_row in class_mapping.iterrows():
         label_id = int(class_row["label_id"])
@@ -368,21 +366,12 @@ def fit_subset_probability_model_from_data(
         positive_count = int(y.sum())
         negative_count = int((y == 0).sum())
         if positive_count < min_class_samples or negative_count < min_class_samples:
-            print(
-                f"[Calibration {class_number + 1}/{len(class_mapping)}] "
-                f"Skipping '{class_name}': {positive_count} positives, "
-                f"{negative_count} negatives"
-            )
+            progress.update(detail=f"skipped {class_name}")
             continue
 
-        print(
-            f"[Calibration {class_number + 1}/{len(class_mapping)}] "
-            f"Fitting '{class_name}' with {positive_count} multi-label positives"
-        )
         classifier, metrics = fit_calibrated_classifier(
             X_train_scaled,
             y,
-            target_precision=target_precision,
             random_state=42 + label_id,
             tune_regularization=tune_regularization,
             fixed_c=fixed_c,
@@ -399,6 +388,9 @@ def fit_subset_probability_model_from_data(
             "label_name": class_name,
             **metrics,
         })
+        progress.update(detail=class_name)
+
+    progress.close()
 
     if not class_ids:
         raise ValueError("No classes had enough examples for calibration.")

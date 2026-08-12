@@ -1,2 +1,0 @@
-run,random_seed,classes,selected_image_count,lambda,selected_data_weight,C,M_0_macro_auc,M_1_macro_auc,M_0_micro_auc,M_1_micro_auc,macro_auc_change,micro_auc_change
-1,3939262722,pizza|chair|baseball bat|cell phone|elephant,200,0.005,0.001,0.01,0.9302834900680284,0.9302994300980316,0.94087753709325,0.9410166820084372,1.5940030003269712e-05,0.00013914491518729477

@@ -1,6 +1,5 @@
 from pathlib import Path
 from dataclasses import dataclass
-from time import perf_counter
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -12,19 +11,38 @@ from sklearn.linear_model import LogisticRegression
 
 import __utils__ as ut
 import optimization as opt
+from progress import ProgressBar
 import subset_probability as sp
 
 
 OUTPUT_DIR = ut.PROJECT_ROOT / "_hyperparameter_sensitivity"
-LAMBDA_VALUES = [0.001, 0.005, 0.01, 0.025]
-SELECTED_DATA_WEIGHTS = [0.01, 0.1, 1.0]
-C_VALUES = [0.0001, 0.001, 0.01, 0.1, 1.0, 10.0]
-MAX_C_BOUNDARY_EXPANSIONS = 8
+LAMBDA_MIN = 1e-4
+INITIAL_LAMBDA_VALUES = (0.001, 0.005, 0.01, 0.025)
+INITIAL_SELECTED_DATA_WEIGHTS = (0.01, 0.1, 1.0)
+INITIAL_C_VALUES = (0.0001, 0.001, 0.01, 0.1, 1.0, 10.0)
+LAMBDA_VALUES = list(INITIAL_LAMBDA_VALUES)
+SELECTED_DATA_WEIGHTS = list(INITIAL_SELECTED_DATA_WEIGHTS)
+C_VALUES = list(INITIAL_C_VALUES)
+MAX_BOUNDARY_EXPANSION_ROUNDS = 5
 CV_FOLDS = 3
 CV_RANDOM_STATE = 42
 CANDIDATE_FRACTION = 0.25
-SELECTION_COUNT_PER_CLASS = None
+SELECTION_COUNTS_PER_CLASS = tuple(range(20, 201, 20))
+HYPERPARAMETER_TUNING_SELECTION_COUNT = 40
 REFERENCE_COUNT = 30
+
+
+def _overall_progress_label(completed, total, width=18):
+    ratio = completed / total if total else 1.0
+    filled = min(width, int(width * ratio))
+    bar = "#" * filled + "-" * (width - filled)
+    return f"Overall [{bar}] {completed}/{total} ({ratio:.1%})"
+
+
+def reset_search_grids():
+    LAMBDA_VALUES[:] = INITIAL_LAMBDA_VALUES
+    SELECTED_DATA_WEIGHTS[:] = INITIAL_SELECTED_DATA_WEIGHTS
+    C_VALUES[:] = INITIAL_C_VALUES
 
 
 @dataclass
@@ -75,6 +93,9 @@ def _selection_contexts(X_base, metadata_base, X_candidates, class_ids):
     X_base_scaled = base_scaler.fit_transform(X_base)
     X_candidate_scaled = base_scaler.transform(X_candidates)
     gamma = 1.0 / X_base_scaled.shape[1]
+    candidate_kernel = opt._kernel_matrix(
+        X_candidate_scaled, X_candidate_scaled, "rbf", gamma
+    )
     contexts = []
     for position, label_id in enumerate(class_ids):
         reference_mask = sp.multilabel_targets(metadata_base, int(label_id)).astype(bool)
@@ -84,26 +105,48 @@ def _selection_contexts(X_base, metadata_base, X_candidates, class_ids):
             X_base_scaled[reference_mask], REFERENCE_COUNT,
             method="kernel_herding", kernel="rbf", gamma=gamma,
         )
-        contexts.append((position, reference, X_candidate_scaled, gamma))
+        contexts.append((
+            position, reference, X_candidate_scaled, gamma,
+            opt._kernel_matrix(reference, reference, "rbf", gamma),
+            opt._kernel_matrix(reference, X_candidate_scaled, "rbf", gamma),
+            candidate_kernel,
+        ))
     return contexts
 
 
-def _select_candidates(contexts, probabilities, lambda_value):
-    selected = set()
-    for position, reference, X_candidate_scaled, gamma in contexts:
+def _select_candidate_prefixes(
+    contexts, probabilities, lambda_value, selection_counts, progress_prefix="Selection"
+):
+    choices_by_class = []
+    for (
+        position, reference, X_candidate_scaled, gamma,
+        reference_kernel, reference_candidate_kernel, candidate_kernel,
+    ) in contexts:
         choices = opt.greedy_maximize_von_neumann_entropy(
             reference,
             X_candidate_scaled,
             np.arange(len(X_candidate_scaled)),
             probabilities[:, position],
-            SELECTION_COUNT_PER_CLASS,
+            max(selection_counts),
             "rbf", gamma,
             probability_lambda=lambda_value,
-            stop_when_objective_decreases=True,
+            stop_when_objective_decreases=False,
             eigenvalue_method="direct",
+            precomputed_reference_kernel=reference_kernel,
+            precomputed_reference_candidate_kernel=reference_candidate_kernel,
+            precomputed_candidate_kernel=candidate_kernel,
+            progress_label=f"{progress_prefix}, class {position + 1}",
         )
-        selected.update(item["target_index"] for item in choices)
-    return np.array(sorted(selected), dtype=int)
+        choices_by_class.append(choices)
+    prefixes = {}
+    for selection_count in selection_counts:
+        selected = {
+            item["target_index"]
+            for choices in choices_by_class
+            for item in choices[:selection_count]
+        }
+        prefixes[selection_count] = np.array(sorted(selected), dtype=int)
+    return prefixes
 
 
 def _fit_fast(X, metadata, class_mapping, c_value, sample_weight=None):
@@ -143,13 +186,24 @@ def _plot_sensitivity(aggregate, best):
         ("lambda", LAMBDA_VALUES, "Lambda"),
         ("selected_data_weight", SELECTED_DATA_WEIGHTS, "Selected-data trust weight"),
         ("C", C_VALUES, "L2 inverse regularization (C)"),
+        ("selection_k_per_class", SELECTION_COUNTS_PER_CLASS, "Selections per class (K)"),
     ]
-    overview, overview_axes = plt.subplots(1, 3, figsize=(18, 5.2))
+    overview, overview_axes = plt.subplots(2, 2, figsize=(14, 10))
+    overview_axes = overview_axes.ravel()
     for overview_axis, (parameter, values, label) in zip(overview_axes, settings):
         controlled = aggregate.copy()
-        for other in ("lambda", "selected_data_weight", "C"):
+        for other in ("lambda", "selected_data_weight", "C", "selection_k_per_class"):
             if other != parameter:
-                controlled = controlled[np.isclose(controlled[other], best[other])]
+                target = (
+                    HYPERPARAMETER_TUNING_SELECTION_COUNT
+                    if other == "selection_k_per_class" and parameter != "selection_k_per_class"
+                    else best[other]
+                )
+                controlled = controlled[np.isclose(controlled[other], target)]
+        if parameter == "selection_k_per_class":
+            controlled = controlled[
+                controlled[parameter].isin(SELECTION_COUNTS_PER_CLASS)
+            ]
         controlled = controlled.sort_values(parameter)
         figure, axis = plt.subplots(figsize=(8, 5.5))
         axis.errorbar(
@@ -196,7 +250,9 @@ def _plot_sensitivity(aggregate, best):
 
 def run_hyperparameter_sweep(
     training_dir="saved_vectors/train",
-    _c_boundary_expansion_count=0,
+    selection_counts_per_class=SELECTION_COUNTS_PER_CLASS,
+    _boundary_expansion_count=0,
+    _fixed_parameters=None,
 ):
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     X, _, _, _, metadata, class_mapping = ut.load_DINO_vectors(training_dir)
@@ -207,14 +263,55 @@ def run_hyperparameter_sweep(
     data_seed = int(selection_manifest["random_seed"].iloc[0])
     splitter = KFold(n_splits=CV_FOLDS, shuffle=True, random_state=CV_RANDOM_STATE)
     checkpoint_path = OUTPUT_DIR / "cv_sweep_results.csv"
-    key_columns = ["fold", "lambda", "selected_data_weight", "C"]
+    selection_counts_per_class = tuple(sorted(set(int(k) for k in selection_counts_per_class)))
+    if not selection_counts_per_class or selection_counts_per_class[0] <= 0:
+        raise ValueError("K values must be positive integers; K=0 is not allowed.")
+    selection_grid_id = "|".join(map(str, selection_counts_per_class))
+    if _fixed_parameters is None:
+        active_lambdas = LAMBDA_VALUES
+        active_weights = SELECTED_DATA_WEIGHTS
+        active_cs = C_VALUES
+        active_selection_counts = (HYPERPARAMETER_TUNING_SELECTION_COUNT,)
+    else:
+        active_lambdas = (float(_fixed_parameters["lambda"]),)
+        active_weights = (float(_fixed_parameters["selected_data_weight"]),)
+        active_cs = (float(_fixed_parameters["C"]),)
+        active_selection_counts = selection_counts_per_class
+    key_columns = ["fold", "lambda", "selected_data_weight", "C", "selection_k_per_class"]
     if checkpoint_path.exists():
         results = pd.read_csv(checkpoint_path)
-        if "data_seed" in results and set(results["data_seed"]) == {data_seed}:
+        if (
+            "data_seed" in results
+            and set(results["data_seed"]) == {data_seed}
+            and "selection_grid" in results
+            and set(results["selection_grid"].astype(str)) == {selection_grid_id}
+        ):
+            for grid, column in (
+                (LAMBDA_VALUES, "lambda"),
+                (SELECTED_DATA_WEIGHTS, "selected_data_weight"),
+                (C_VALUES, "C"),
+            ):
+                grid.extend(
+                    float(value) for value in results[column].unique()
+                    if float(value) not in grid
+                    and (column != "lambda" or float(value) >= LAMBDA_MIN)
+                )
+                grid.sort()
+            inferred_expansions = max(
+                len(LAMBDA_VALUES) - len(INITIAL_LAMBDA_VALUES),
+                len(SELECTED_DATA_WEIGHTS) - len(INITIAL_SELECTED_DATA_WEIGHTS),
+                len(C_VALUES) - len(INITIAL_C_VALUES),
+            )
+            _boundary_expansion_count = max(
+                _boundary_expansion_count, inferred_expansions
+            )
             results = results[
                 results["lambda"].isin(LAMBDA_VALUES)
                 & results["selected_data_weight"].isin(SELECTED_DATA_WEIGHTS)
                 & results["C"].isin(C_VALUES)
+                & results["selection_k_per_class"].isin(
+                    (*selection_counts_per_class, HYPERPARAMETER_TUNING_SELECTION_COUNT)
+                )
                 & results["fold"].between(1, CV_FOLDS)
             ].copy()
             rows = results.to_dict("records")
@@ -229,17 +326,32 @@ def run_hyperparameter_sweep(
     else:
         rows = []
         completed_keys = set()
-    total_combinations = CV_FOLDS * len(C_VALUES) * len(LAMBDA_VALUES) * len(SELECTED_DATA_WEIGHTS)
-    completed = len(completed_keys)
-    initial_completed = completed
-    started = perf_counter()
-    print(f"Sweep progress: {completed}/{total_combinations} ({100 * completed / total_combinations:.1f}%)")
+    required_keys = {
+        tuple(float(value) for value in (fold, lambda_value, trust_weight, c_value, selection_count))
+        for fold in range(1, CV_FOLDS + 1)
+        for lambda_value in active_lambdas
+        for trust_weight in active_weights
+        for c_value in active_cs
+        for selection_count in active_selection_counts
+    }
+    total_combinations = len(required_keys)
+    completed = len(completed_keys & required_keys)
+    progress = ProgressBar(total_combinations, "Hyperparameter sweep", completed)
 
     for fold, (development_indices, validation_indices) in enumerate(splitter.split(X), 1):
         rng = np.random.default_rng(CV_RANDOM_STATE + fold)
         shuffled = development_indices.copy()
         rng.shuffle(shuffled)
-        candidate_count = max(1, int(round(len(shuffled) * CANDIDATE_FRACTION)))
+        candidate_count = max(
+            max(selection_counts_per_class),
+            int(round(len(shuffled) * CANDIDATE_FRACTION)),
+        )
+        candidate_count = min(candidate_count, len(shuffled) - 1)
+        if candidate_count < max(selection_counts_per_class):
+            raise ValueError(
+                f"CV fold {fold} has only {candidate_count} candidate images, "
+                f"but K={max(selection_counts_per_class)} was requested."
+            )
         candidate_indices = shuffled[:candidate_count]
         base_indices = shuffled[candidate_count:]
         X_base, metadata_base = X[base_indices], metadata.iloc[base_indices].reset_index(drop=True)
@@ -249,22 +361,15 @@ def run_hyperparameter_sweep(
             X_base, metadata_base, X_candidate, class_mapping["label_id"].to_numpy()
         )
 
-        for c_value in C_VALUES:
+        for c_value in active_cs:
             c_keys = {
-                tuple(float(value) for value in (fold, lambda_value, trust_weight, c_value))
-                for lambda_value in LAMBDA_VALUES
-                for trust_weight in SELECTED_DATA_WEIGHTS
+                tuple(float(value) for value in (fold, lambda_value, trust_weight, c_value, selection_count))
+                for lambda_value in active_lambdas
+                for trust_weight in active_weights
+                for selection_count in active_selection_counts
             }
             if c_keys.issubset(completed_keys):
-                print(
-                    f"[Fold {fold}/{CV_FOLDS}] C={c_value:g} already checkpointed",
-                    flush=True,
-                )
                 continue
-            print(
-                f"[Fold {fold}/{CV_FOLDS}] fitting calibrated baseline with C={c_value:g}",
-                flush=True,
-            )
             # Lambda multiplies log calibrated probability, so cache one fully
             # calibrated baseline for each (fold, C). Trust-weight variants
             # still use fast ranking models during CV.
@@ -272,66 +377,62 @@ def run_hyperparameter_sweep(
                 X_base, metadata_base, class_mapping, c_value
             )
             candidate_probabilities = _probabilities(baseline, X_candidate)
-            for lambda_value in LAMBDA_VALUES:
-                selected = _select_candidates(
-                    contexts, candidate_probabilities, lambda_value
+            for lambda_value in active_lambdas:
+                selected_by_k = _select_candidate_prefixes(
+                    contexts, candidate_probabilities, lambda_value,
+                    active_selection_counts,
+                    progress_prefix=(
+                        f"{_overall_progress_label(completed, total_combinations)} | "
+                        f"Fold {fold}, C={c_value:g}, lambda={lambda_value:g}, "
+                        f"ranking to K={max(active_selection_counts)}"
+                    ),
                 )
-                if len(selected):
+                for selection_count, selected in selected_by_k.items():
                     X_augmented = np.concatenate([X_base, X_candidate[selected]])
                     metadata_augmented = pd.concat(
                         [metadata_base, metadata_candidate.iloc[selected]],
                         ignore_index=True,
                     )
-                else:
-                    # Selecting nothing is a valid acquisition outcome. Score
-                    # the unchanged baseline-size training data in every fold
-                    # instead of dropping the configuration from CV.
-                    X_augmented = X_base
-                    metadata_augmented = metadata_base
-                for trust_weight in SELECTED_DATA_WEIGHTS:
-                    key = tuple(float(value) for value in (
-                        fold, lambda_value, trust_weight, c_value
-                    ))
-                    if key in completed_keys:
-                        continue
-                    weights = np.concatenate([
-                        np.ones(len(X_base)),
-                        np.full(len(selected), trust_weight),
-                    ])
-                    model = _fit_fast(
-                        X_augmented, metadata_augmented, class_mapping,
-                        c_value, sample_weight=weights,
-                    )
-                    macro, micro, class_count = _auc_metrics(
-                        model, X[validation_indices],
-                        metadata.iloc[validation_indices].reset_index(drop=True),
-                    )
-                    rows.append({
-                        "data_seed": data_seed,
-                        "fold": fold, "lambda": lambda_value,
-                        "selected_data_weight": trust_weight, "C": c_value,
-                        "selected_count": len(selected),
-                        "evaluated_class_count": class_count,
-                        "macro_auc": macro, "micro_auc": micro,
-                    })
-                    completed_keys.add(key)
-                    completed += 1
-                    pd.DataFrame(rows).to_csv(checkpoint_path, index=False)
-                    elapsed = perf_counter() - started
-                    newly_completed = max(1, completed - initial_completed)
-                    average = elapsed / newly_completed
-                    remaining_minutes = average * (total_combinations - completed) / 60
-                    print(
-                        f"Sweep progress: {completed}/{total_combinations} "
-                        f"({100 * completed / total_combinations:.1f}%) | "
-                        f"C={c_value:g} | ETA ~{remaining_minutes:.1f} min",
-                        flush=True,
-                    )
+                    for trust_weight in active_weights:
+                        key = tuple(float(value) for value in (
+                            fold, lambda_value, trust_weight, c_value, selection_count
+                        ))
+                        if key in completed_keys:
+                            continue
+                        weights = np.concatenate([
+                            np.ones(len(X_base)),
+                            np.full(len(selected), trust_weight),
+                        ])
+                        model = _fit_fast(
+                            X_augmented, metadata_augmented, class_mapping,
+                            c_value, sample_weight=weights,
+                        )
+                        macro, micro, class_count = _auc_metrics(
+                            model, X[validation_indices],
+                            metadata.iloc[validation_indices].reset_index(drop=True),
+                        )
+                        rows.append({
+                            "data_seed": data_seed, "selection_grid": selection_grid_id,
+                            "fold": fold, "lambda": lambda_value,
+                            "selected_data_weight": trust_weight, "C": c_value,
+                            "selected_count": len(selected),
+                            "selection_k_per_class": selection_count,
+                            "evaluated_class_count": class_count,
+                            "macro_auc": macro, "micro_auc": micro,
+                        })
+                        completed_keys.add(key)
+                        completed += 1
+                        pd.DataFrame(rows).to_csv(checkpoint_path, index=False)
+                        progress.update(detail=(
+                            f"fold={fold}, C={c_value:g}, lambda={lambda_value:g}, K={selection_count}"
+                        ))
+
+    progress.close()
 
     results = pd.DataFrame(rows)
     results.to_csv(checkpoint_path, index=False)
     aggregate = (
-        results.groupby(["lambda", "selected_data_weight", "C"], as_index=False)
+        results.groupby(["lambda", "selected_data_weight", "C", "selection_k_per_class"], as_index=False)
         .agg(
             macro_auc_mean=("macro_auc", "mean"),
             macro_auc_std=("macro_auc", "std"),
@@ -356,77 +457,122 @@ def run_hyperparameter_sweep(
             "No hyperparameter configuration has results from every CV fold. "
             "Resume the sweep to fill the checkpoint before selecting a winner."
         )
-    raw_best = eligible.iloc[0].copy()
-    c_at_lower_boundary = np.isclose(raw_best["C"], min(C_VALUES))
-    c_at_upper_boundary = np.isclose(raw_best["C"], max(C_VALUES))
-    if c_at_lower_boundary or c_at_upper_boundary:
-        if _c_boundary_expansion_count >= MAX_C_BOUNDARY_EXPANSIONS:
-            raise RuntimeError(
-                "C optimum remained on a search boundary after "
-                f"{MAX_C_BOUNDARY_EXPANSIONS} expansions. Current grid: {C_VALUES}"
-            )
-        new_c = (
-            min(C_VALUES) / 10.0
-            if c_at_lower_boundary
-            else max(C_VALUES) * 10.0
+    if _fixed_parameters is None:
+        selection_eligible = eligible[
+            eligible["selection_k_per_class"] == HYPERPARAMETER_TUNING_SELECTION_COUNT
+        ].copy()
+    else:
+        selection_eligible = eligible[
+            np.isclose(eligible["lambda"], _fixed_parameters["lambda"])
+            & np.isclose(eligible["selected_data_weight"], _fixed_parameters["selected_data_weight"])
+            & np.isclose(eligible["C"], _fixed_parameters["C"])
+            & eligible["selection_k_per_class"].isin(selection_counts_per_class)
+        ].copy()
+    best_macro = selection_eligible["macro_auc_mean"].max()
+    tied = selection_eligible[np.isclose(
+        selection_eligible["macro_auc_mean"], best_macro, rtol=0.0, atol=1e-12
+    )].copy()
+    best_micro = tied["micro_auc_mean"].max()
+    tied = tied[np.isclose(
+        tied["micro_auc_mean"], best_micro, rtol=0.0, atol=1e-12
+    )].copy()
+    if len(tied) > 1:
+        def boundary_clearance(row):
+            clearance = 0
+            for parameter, grid in (
+                ("lambda", LAMBDA_VALUES),
+                ("selected_data_weight", SELECTED_DATA_WEIGHTS),
+                ("C", C_VALUES),
+            ):
+                position = int(np.argmin(np.abs(np.asarray(grid) - row[parameter])))
+                clearance += min(position, len(grid) - 1 - position)
+            return clearance
+
+        tied["_boundary_clearance"] = tied.apply(boundary_clearance, axis=1)
+        tied = tied.sort_values(
+            ["_boundary_clearance", "selection_k_per_class"],
+            ascending=[False, True],
         )
-        C_VALUES.append(float(new_c))
-        C_VALUES.sort()
-        direction = "lower" if c_at_lower_boundary else "upper"
+    raw_best = tied.iloc[0].drop(labels=["_boundary_clearance"], errors="ignore").copy()
+    boundary_parameters = []
+    parameter_grids = (
+        ("lambda", LAMBDA_VALUES),
+        ("selected_data_weight", SELECTED_DATA_WEIGHTS),
+        ("C", C_VALUES),
+    )
+    for parameter, grid in parameter_grids if _fixed_parameters is None else ():
+        lower = np.isclose(raw_best[parameter], min(grid)) and not (
+            parameter == "lambda" and min(grid) <= LAMBDA_MIN
+        )
+        upper = np.isclose(raw_best[parameter], max(grid))
+        if lower or upper:
+            boundary_parameters.append((parameter, grid, lower, upper))
+
+    if boundary_parameters:
+        if _boundary_expansion_count >= MAX_BOUNDARY_EXPANSION_ROUNDS:
+            grid_description = "; ".join(
+                f"{name}={grid}" for name, grid in parameter_grids
+            )
+            raise RuntimeError(
+                "ROC-AUC optimum remained on a search boundary after "
+                f"{MAX_BOUNDARY_EXPANSION_ROUNDS} expansion rounds. "
+                f"Current grids: {grid_description}"
+            )
+        for parameter, grid, lower, upper in boundary_parameters:
+            additions = []
+            if lower:
+                new_lower = min(grid) / 10.0
+                if parameter == "lambda":
+                    new_lower = max(new_lower, LAMBDA_MIN)
+                additions.append(float(new_lower))
+            if upper:
+                additions.append(float(max(grid) * 10.0))
+            grid.extend(value for value in additions if value not in grid)
+            grid.sort()
+            directions = " and ".join(
+                direction for direction, active in (("lower", lower), ("upper", upper))
+                if active
+            )
+            print(
+                f"Best {parameter}={raw_best[parameter]:g} is on the "
+                f"{directions} boundary; added {additions}.",
+                flush=True,
+            )
+        return run_hyperparameter_sweep(
+            training_dir,
+            selection_counts_per_class=selection_counts_per_class,
+            _boundary_expansion_count=_boundary_expansion_count + 1,
+        )
+    if _fixed_parameters is None:
+        fixed_parameters = {
+            "lambda": float(raw_best["lambda"]),
+            "selected_data_weight": float(raw_best["selected_data_weight"]),
+            "C": float(raw_best["C"]),
+        }
         print(
-            f"Raw best C={raw_best['C']:g} is on the {direction} boundary. "
-            f"Expanding C grid with {new_c:g} and continuing the sweep.",
+            f"Stage 1 selected at K={HYPERPARAMETER_TUNING_SELECTION_COUNT}: "
+            f"lambda={fixed_parameters['lambda']:g}, "
+            f"trust={fixed_parameters['selected_data_weight']:g}, "
+            f"C={fixed_parameters['C']:g}. Now optimizing K.",
             flush=True,
         )
         return run_hyperparameter_sweep(
             training_dir,
-            _c_boundary_expansion_count=_c_boundary_expansion_count + 1,
+            selection_counts_per_class=selection_counts_per_class,
+            _boundary_expansion_count=_boundary_expansion_count,
+            _fixed_parameters=fixed_parameters,
         )
-    boundary_parameters = []
-    for parameter, grid in (
-        ("lambda", LAMBDA_VALUES),
-        ("selected_data_weight", SELECTED_DATA_WEIGHTS),
-        ("C", C_VALUES),
-    ):
-        if np.isclose(raw_best[parameter], min(grid)) or np.isclose(
-            raw_best[parameter], max(grid)
-        ):
-            boundary_parameters.append(parameter)
-    one_se_threshold = raw_best["macro_auc_mean"] - raw_best["macro_auc_se"]
-    competitive = eligible[
-        eligible["macro_auc_mean"] >= one_se_threshold
-    ].copy()
-    moderate_lambda = float(np.exp(np.mean(np.log(LAMBDA_VALUES))))
-    competitive["lambda_log_distance_from_center"] = np.abs(
-        np.log(competitive["lambda"]) - np.log(moderate_lambda)
-    )
-    competitive = competitive.sort_values(
-        [
-            "selected_data_weight",
-            "C",
-            "lambda_log_distance_from_center",
-            "mean_selected_count",
-            "macro_auc_mean",
-            "micro_auc_mean",
-        ],
-        # Within the one-standard-error competitive set, prefer the most
-        # liberal trust in newly selected data.
-        ascending=[False, True, True, True, False, False],
-    )
-    selected = competitive.iloc[0].copy()
-    selected["selection_rule"] = "one_standard_error_liberal_trust"
-    selected["raw_best_macro_auc_mean"] = raw_best["macro_auc_mean"]
-    selected["raw_best_macro_auc_se"] = raw_best["macro_auc_se"]
-    selected["one_se_macro_auc_threshold"] = one_se_threshold
-    selected["competitive_configuration_count"] = len(competitive)
+    # Select the configuration that directly maximizes cross-validated ROC AUC.
+    # The aggregate is already sorted by macro AUC and then micro AUC.
+    selected = raw_best.copy()
+    selected["selection_rule"] = "staged_maximum_cv_macro_roc_auc"
     selected["raw_optimum_boundary_parameters"] = (
-        "|".join(boundary_parameters) if boundary_parameters else "none"
+        "none"
     )
 
     pd.DataFrame([raw_best]).to_csv(
         OUTPUT_DIR / "raw_highest_auc_hyperparameters.csv", index=False
     )
-    competitive.to_csv(OUTPUT_DIR / "one_se_competitive_configurations.csv", index=False)
     pd.DataFrame([selected]).to_csv(
         OUTPUT_DIR / "best_hyperparameters.csv", index=False
     )
@@ -434,13 +580,7 @@ def run_hyperparameter_sweep(
     _plot_sensitivity(eligible, best)
     print("Raw highest-mean-macro-AUC configuration:")
     print(pd.DataFrame([raw_best]).to_string(index=False))
-    if boundary_parameters:
-        print(
-            "Warning: raw optimum is on the search boundary for: "
-            + ", ".join(boundary_parameters)
-            + ". Expand those grids before treating the optimum as settled."
-        )
-    print("Selected by the one-standard-error rule:")
+    print("Selected by maximum cross-validated macro ROC AUC:")
     print(pd.DataFrame([selected]).to_string(index=False))
     print(f"Final selected C={selected['C']:g}")
     return best, results, eligible

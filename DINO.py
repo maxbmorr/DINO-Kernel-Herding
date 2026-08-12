@@ -3,6 +3,7 @@ import json
 from PIL import Image
 from torchvision import datasets, transforms
 from torch.utils.data import DataLoader, Dataset
+from progress import ProgressBar
 from pathlib import Path
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
@@ -165,17 +166,11 @@ def DINO_Vector(dataset_path, annotation_path=None, return_metadata=False):
     labels_list = []
 
     processed_count = 0
+    progress = ProgressBar(len(paths), "Creating DINO embeddings")
 
     with torch.no_grad():
         for images, labels in loader:
             batch_size = images.size(0)
-            batch_paths = paths[processed_count:processed_count + batch_size]
-            print(
-                f"Processing images {processed_count + 1}-"
-                f"{processed_count + batch_size} of {len(paths)}: "
-                f"{batch_paths[-1]}"
-            )
-
             images = images.to(device)
             
             embeddings = model(images)
@@ -183,6 +178,8 @@ def DINO_Vector(dataset_path, annotation_path=None, return_metadata=False):
             embeddings_list.append(embeddings.cpu())
             labels_list.append(labels.cpu())
             processed_count += batch_size
+            progress.update(batch_size)
+    progress.close()
     X = torch.cat(embeddings_list, dim = 0)
     Y = torch.cat(labels_list, dim = 0)
     if return_metadata:

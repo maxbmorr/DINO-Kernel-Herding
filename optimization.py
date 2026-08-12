@@ -1,5 +1,4 @@
 from pathlib import Path
-from time import perf_counter
 
 import numpy as np
 import pandas as pd
@@ -7,6 +6,7 @@ from scipy.optimize import brentq
 from sklearn.preprocessing import StandardScaler
 
 import __utils__ as ut
+from progress import ProgressBar
 
 
 def _resolve_path(path):
@@ -255,6 +255,9 @@ def greedy_maximize_von_neumann_entropy(
     stop_when_objective_decreases=True,
     eigenvalue_method="direct",
     progress_label=None,
+    precomputed_reference_kernel=None,
+    precomputed_reference_candidate_kernel=None,
+    precomputed_candidate_kernel=None,
 ):
     if probability_lambda <= 0:
         raise ValueError(
@@ -265,17 +268,52 @@ def greedy_maximize_von_neumann_entropy(
 
     X_labeled_class = np.asarray(X_labeled_class, dtype=np.float64)
     X_candidates = np.asarray(X_candidates, dtype=np.float64)
+    candidate_indices = np.asarray(candidate_indices)
+    candidate_positive_probabilities = np.asarray(
+        candidate_positive_probabilities, dtype=np.float64
+    )
+    if len(X_candidates) != len(candidate_indices) or len(candidate_indices) != len(
+        candidate_positive_probabilities
+    ):
+        raise ValueError("Candidate vectors, indices, and probabilities must align.")
+    if len(np.unique(candidate_indices)) != len(candidate_indices):
+        raise ValueError("candidate_indices must be unique.")
+    if not np.isfinite(candidate_positive_probabilities).all() or np.any(
+        (candidate_positive_probabilities < 0)
+        | (candidate_positive_probabilities > 1)
+    ):
+        raise ValueError("Candidate probabilities must be finite and in [0, 1].")
     selected_indices = []
     selected_candidate_positions = []
     # These blocks do not change between greedy rounds. Caching them preserves
     # the objective while avoiding a full kernel rebuild for every candidate.
-    current_kernel = _kernel_matrix(
-        X_labeled_class, X_labeled_class, kernel, gamma
+    current_kernel = (
+        _kernel_matrix(X_labeled_class, X_labeled_class, kernel, gamma)
+        if precomputed_reference_kernel is None
+        else np.asarray(precomputed_reference_kernel, dtype=np.float64).copy()
     )
-    reference_candidate_kernel = _kernel_matrix(
-        X_labeled_class, X_candidates, kernel, gamma
+    reference_candidate_kernel = (
+        _kernel_matrix(X_labeled_class, X_candidates, kernel, gamma)
+        if precomputed_reference_candidate_kernel is None
+        else np.asarray(precomputed_reference_candidate_kernel, dtype=np.float64)
     )
-    candidate_self_kernel = _kernel_diagonal(X_candidates, kernel)
+    candidate_kernel = (
+        None if precomputed_candidate_kernel is None
+        else np.asarray(precomputed_candidate_kernel, dtype=np.float64)
+    )
+    if current_kernel.shape != (len(X_labeled_class), len(X_labeled_class)):
+        raise ValueError("precomputed_reference_kernel has the wrong shape.")
+    if reference_candidate_kernel.shape != (len(X_labeled_class), len(X_candidates)):
+        raise ValueError("precomputed_reference_candidate_kernel has the wrong shape.")
+    if candidate_kernel is not None and candidate_kernel.shape != (
+        len(X_candidates), len(X_candidates)
+    ):
+        raise ValueError("precomputed_candidate_kernel has the wrong shape.")
+    candidate_self_kernel = (
+        np.diag(candidate_kernel).copy()
+        if candidate_kernel is not None
+        else _kernel_diagonal(X_candidates, kernel)
+    )
     selected_candidate_kernel_rows = []
     current_entropy = _von_neumann_entropy_from_kernel(current_kernel)
     current_log_probability_sum = 0.0
@@ -285,17 +323,15 @@ def greedy_maximize_von_neumann_entropy(
         len(candidate_indices) if selection_count is None
         else min(selection_count, len(candidate_indices))
     )
+    candidate_evaluations = sum(
+        len(candidate_indices) - rank for rank in range(selection_limit)
+    )
+    progress = (
+        ProgressBar(candidate_evaluations, progress_label)
+        if progress_label is not None else None
+    )
     for rank in range(selection_limit):
         remaining_count = len(candidate_indices) - len(selected_candidate_positions)
-        round_started = perf_counter()
-        report_every = max(1, int(np.ceil(remaining_count / 10)))
-        evaluated_count = 0
-        if progress_label is not None:
-            print(
-                f"[{progress_label}] selection round {rank + 1}: "
-                f"evaluating {remaining_count} remaining candidates",
-                flush=True,
-            )
         if eigenvalue_method == "secular":
             current_eigenvalues, current_eigenvectors = np.linalg.eigh(
                 current_kernel
@@ -375,36 +411,12 @@ def greedy_maximize_von_neumann_entropy(
                 best_gain = objective_gain
                 best_log_probability = log_probability
 
-            evaluated_count += 1
-            if progress_label is not None and (
-                evaluated_count % report_every == 0
-                or evaluated_count == remaining_count
-            ):
-                elapsed = perf_counter() - round_started
-                fraction = evaluated_count / remaining_count
-                eta = elapsed * (1.0 - fraction) / max(fraction, 1e-12)
-                print(
-                    f"[{progress_label}] round {rank + 1}: "
-                    f"{evaluated_count}/{remaining_count} candidates "
-                    f"({100 * fraction:.0f}%), elapsed={elapsed:.1f}s, "
-                    f"ETA={eta:.1f}s",
-                    flush=True,
-                )
+            if progress is not None:
+                progress.update(detail=f"selection {rank + 1}/{selection_limit}")
 
         if best_position is None:
-            if progress_label is not None:
-                print(
-                    f"[{progress_label}] stopped: no candidate remained.",
-                    flush=True,
-                )
             break
         if stop_when_objective_decreases and best_gain <= 0.0:
-            if progress_label is not None:
-                print(
-                    f"[{progress_label}] stopped after {rank} selections: "
-                    f"best remaining objective gain={best_gain:.8f} is not positive.",
-                    flush=True,
-                )
             break
 
         selected_candidate_positions.append(best_position)
@@ -438,7 +450,9 @@ def greedy_maximize_von_neumann_entropy(
         expanded_kernel[-1, -1] = candidate_self_kernel[best_position]
         current_kernel = expanded_kernel
         selected_candidate_kernel_rows.append(
-            _kernel_matrix(
+            candidate_kernel[best_position]
+            if candidate_kernel is not None
+            else _kernel_matrix(
                 X_candidates[best_position:best_position + 1],
                 X_candidates,
                 kernel,
@@ -448,14 +462,15 @@ def greedy_maximize_von_neumann_entropy(
         current_entropy = best_entropy
         current_log_probability_sum += best_log_probability
         current_objective = best_objective
-        if progress_label is not None:
-            print(
-                f"[{progress_label}] accepted selection {rank + 1}: "
-                f"objective gain={best_gain:.8f}, "
-                f"entropy gain={selected_indices[-1]['von_neumann_entropy_gain']:.8f}, "
-                f"round time={perf_counter() - round_started:.1f}s",
-                flush=True,
-            )
+
+    if progress is not None:
+        progress.close()
+
+    selected_targets = [item["target_index"] for item in selected_indices]
+    if len(selected_targets) != len(set(selected_targets)):
+        raise AssertionError("Optimizer selected a candidate more than once.")
+    if len(selected_indices) > selection_limit:
+        raise AssertionError("Optimizer exceeded the requested selection cardinality.")
 
     return selected_indices
 

@@ -132,12 +132,46 @@ def save_vector_split(output_dir, X, label_ids, metadata, class_mapping):
     metadata.to_csv(output_dir / "metadata.csv", index=False)
     class_mapping.to_csv(output_dir / "class_mapping.csv", index=False)
 
+
+def max_feasible_positive_samples_per_class(
+    available_positive_count,
+    class_count,
+    samples_per_class,
+    min_known_positive_fraction,
+    training_negative_fraction,
+    test_size,
+):
+    """Largest positive/class budget that leaves enough downstream positives."""
+    count = min(samples_per_class, int(available_positive_count))
+    while count > 0:
+        positive_training_count = class_count * count
+        negative_training_count = (
+            int(round(
+                positive_training_count
+                * training_negative_fraction
+                / (1 - training_negative_fraction)
+            ))
+            if training_negative_fraction else 0
+        )
+        train_size = positive_training_count + negative_training_count
+        required_downstream = (
+            int(np.ceil(min_known_positive_fraction * 2 * train_size))
+            + int(np.ceil(min_known_positive_fraction * test_size))
+        )
+        if available_positive_count - count >= required_downstream:
+            return count
+        count -= 1
+    return 0
+
 def split_DINO_vectors_with_multilabel_training(
     input_dir="saved_vectors",
     selected_class_names=None,
     min_samples_per_class=300,
     samples_per_class=1000,
     random_state=42,
+    min_known_positive_fraction=0.05,
+    training_negative_fraction=0.10,
+    test_size=10000,
 ):
     """Build a leakage-free split with a multi-label quota per training class."""
     if not selected_class_names:
@@ -149,6 +183,12 @@ def split_DINO_vectors_with_multilabel_training(
             "min_samples_per_class must be positive and no greater than "
             "samples_per_class."
         )
+    if not 0 < min_known_positive_fraction < 1:
+        raise ValueError("min_known_positive_fraction must be in (0, 1).")
+    if not 0 <= training_negative_fraction < 1:
+        raise ValueError("training_negative_fraction must be in [0, 1).")
+    if test_size <= 0:
+        raise ValueError("test_size must be positive.")
 
     X, label_ids, _, _, metadata, class_mapping = load_DINO_vectors(input_dir)
     if "all_label_names" not in metadata.columns:
@@ -182,9 +222,20 @@ def split_DINO_vectors_with_multilabel_training(
         raise ValueError(
             "Selected classes have no eligible images: " + ", ".join(empty_classes)
         )
+    # Reserve enough exclusive positives for both downstream pools. Their
+    # target sizes are 2x and 4x the final train size, including shared
+    # neither-class negatives.
+    class_count = len(selected_class_names)
     balanced_sample_count = min(
-        samples_per_class,
-        min(len(eligible) for eligible in eligible_by_class.values()),
+        max_feasible_positive_samples_per_class(
+            len(eligible),
+            class_count,
+            samples_per_class,
+            min_known_positive_fraction,
+            training_negative_fraction,
+            test_size,
+        )
+        for eligible in eligible_by_class.values()
     )
     if balanced_sample_count < min_samples_per_class:
         raise ValueError(
@@ -200,30 +251,103 @@ def split_DINO_vectors_with_multilabel_training(
         sampled_by_class[class_name] = chosen
         training_indices.update(chosen.tolist())
 
+    positive_training_count = len(training_indices)
+    training_negative_count = int(round(
+        positive_training_count
+        * training_negative_fraction
+        / (1 - training_negative_fraction)
+    )) if training_negative_fraction else 0
+    neither_class_candidates = np.array([
+        index for index, labels in enumerate(label_sets)
+        if not (labels & selected_name_set) and index not in training_indices
+    ], dtype=int)
+    if len(neither_class_candidates) < training_negative_count:
+        raise ValueError(
+            f"Only {len(neither_class_candidates)} neither-class images are "
+            f"available, but {training_negative_count} are required."
+        )
+    if training_negative_count:
+        negative_training_indices = rng.choice(
+            neither_class_candidates,
+            size=training_negative_count,
+            replace=False,
+        )
+        training_indices.update(negative_training_indices.tolist())
+
     train_indices = np.array(sorted(training_indices), dtype=int)
     remaining_mask = np.ones(len(X), dtype=bool)
     remaining_mask[train_indices] = False
     remaining_indices = np.flatnonzero(remaining_mask)
 
     retrain_count = min(2 * len(train_indices), len(remaining_indices))
-    target_test_count = min(
-        2 * retrain_count,
-        len(remaining_indices) - retrain_count,
+    target_test_count = int(test_size)
+    if retrain_count + target_test_count > len(remaining_indices):
+        raise ValueError(
+            f"Requested retrain ({retrain_count}) plus test ({target_test_count}) "
+            f"images exceeds the {len(remaining_indices)} images remaining."
+        )
+    retrain_quota = int(np.ceil(min_known_positive_fraction * retrain_count))
+    test_quota = int(np.ceil(min_known_positive_fraction * target_test_count))
+    reserved_retrain = set()
+    reserved_test = set()
+    for class_name in selected_class_names:
+        available = np.array([
+            index for index in eligible_by_class[class_name]
+            if index not in training_indices
+        ], dtype=int)
+        rng.shuffle(available)
+        required = retrain_quota + test_quota
+        if len(available) < required:
+            raise ValueError(
+                f"Class '{class_name}' has {len(available)} remaining exclusive "
+                f"positives, but {required} are required to guarantee "
+                f"{min_known_positive_fraction:.1%} positives in retrain and test."
+            )
+        reserved_retrain.update(available[:retrain_quota].tolist())
+        reserved_test.update(available[retrain_quota:required].tolist())
+
+    retrain_fill_pool = np.array([
+        index for index in remaining_indices
+        if index not in reserved_retrain and index not in reserved_test
+    ], dtype=int)
+    retrain_fill = rng.choice(
+        retrain_fill_pool,
+        size=retrain_count - len(reserved_retrain),
+        replace=False,
     )
-    retrain_indices = np.sort(
-        rng.choice(remaining_indices, size=retrain_count, replace=False)
+    retrain_indices = np.sort(np.array(
+        [*reserved_retrain, *retrain_fill.tolist()], dtype=int
+    ))
+    retrain_set = set(retrain_indices.tolist())
+    test_fill_pool = np.array([
+        index for index in remaining_indices
+        if index not in retrain_set and index not in reserved_test
+    ], dtype=int)
+    test_fill = rng.choice(
+        test_fill_pool,
+        size=target_test_count - len(reserved_test),
+        replace=False,
     )
+    test_indices = np.sort(np.array(
+        [*reserved_test, *test_fill.tolist()], dtype=int
+    ))
     retrain_mask = np.zeros(len(X), dtype=bool)
     retrain_mask[retrain_indices] = True
     test_pool = remaining_indices[~retrain_mask[remaining_indices]]
-    test_indices = np.sort(
-        rng.choice(test_pool, size=target_test_count, replace=False)
-    )
     unused_count = len(test_pool) - len(test_indices)
     actual_test_positive = sum(
         bool(label_sets.iloc[index] & selected_name_set)
         for index in test_indices
     )
+    for split_name, indices in (("retrain", retrain_indices), ("test", test_indices)):
+        for class_name in selected_class_names:
+            positive_count = sum(
+                class_name in label_sets.iloc[index] for index in indices
+            )
+            if positive_count / len(indices) < min_known_positive_fraction:
+                raise AssertionError(
+                    f"{split_name} positive quota failed for '{class_name}'."
+                )
 
     input_dir = Path(input_dir)
     if not input_dir.is_absolute():
@@ -244,12 +368,19 @@ def split_DINO_vectors_with_multilabel_training(
     print(
         f"Multi-label train split: {len(train_indices)} unique images "
         f"using {balanced_sample_count} images per class "
-        f"(balanced, cap={samples_per_class})"
+        f"(balanced, cap={samples_per_class}) and {training_negative_count} "
+        f"neither-class negatives ({training_negative_count / len(train_indices):.1%})"
     )
     for class_name, indices in sampled_by_class.items():
         print(f"  {class_name}: {len(indices)} sampled images")
     print(f"Random retrain split: {len(retrain_indices)} images (2x training)")
     print(f"Random test split: {len(test_indices)} images (2x retraining)")
+    for split_name, indices in (("retrain", retrain_indices), ("test", test_indices)):
+        prevalences = ", ".join(
+            f"{class_name}={sum(class_name in label_sets.iloc[i] for i in indices) / len(indices):.1%}"
+            for class_name in selected_class_names
+        )
+        print(f"Known-positive prevalence in {split_name}: {prevalences}")
     print(
         f"Test images containing a selected class: {actual_test_positive}/"
         f"{len(test_indices)} ({actual_test_positive / len(test_indices):.1%})"

@@ -136,14 +136,57 @@ image may contain only one of the five selected classes, although it may still
 contain any number of non-selected COCO classes. Duplicate images are stored
 once.
 
+To run ten fully independent experiments and average the model metrics, use:
+
+```powershell
+py main.py --10run
+```
+
+Each run generates a new class selection, random seed, train/retrain/test split,
+hyperparameter sweep, optimized acquisition, random baseline, and test
+evaluation. Results are checkpointed after every completed run in:
+
 ```text
-retrain size = 2 * unique training size
-test size = 2 * retrain size
+_ten_run_average/_ten_run_results.csv
+_ten_run_average/_ten_run_average.csv
+_ten_run_average/_ten_run_average.png
+_ten_run_average/_ten_run_roc_average.csv
+_ten_run_average/_ten_run_caterpillar.png
+_ten_run_average/_ten_run_dumbbell.png
+_ten_run_average/_ten_run_entropy_probability_tradeoff.png
+```
+
+The folder also preserves each run's individual comparison CSV and PNG. The
+average graph contains separate macro-ROC and micro-ROC panels. Each plots mean
+true-positive rate against false-positive rate on a shared 1,001-point grid,
+with a shaded pointwise 95% confidence interval across the ten independent
+runs. `_ten_run_roc_average.csv` stores every mean curve and confidence bound.
+Each run also preserves its selection-quality calibration graph and its
+entropy–probability tradeoff graph, plus the CSV data behind both figures, using
+`run_01_...` through `run_10_...` filenames.
+The caterpillar plot shows each run's macro-AUC change relative to `M_0`; the
+dumbbell plot compares absolute macro AUC across models; and the pooled
+entropy-probability plot combines all selected images in the common
+`lambda * log(P)` objective space.
+
+Ten percent of the final training set contains none of the selected classes.
+These known neither-class images are negative examples for every one-vs-rest
+classifier. With 550 positives from each of two classes, this gives 1,100
+positive images plus 122 neither-class negatives: `N_train = 1,222`. Images
+positive for one selected class also remain valid negatives for the other.
+
+```text
+retrain size = 2 * unique training size = 2,444 images
+test size = 5,000 images
 ```
 
 Retrain and test rows are sampled randomly without replacement, the three sets
-are disjoint, and unused COCO images remain outside all splits. The test set has
-no forced selected-class composition and no positive-image reservation:
+are disjoint, and unused COCO images remain outside all splits. Before random
+filling, each retrain and test split reserves enough known-positive images to
+guarantee at least 5% prevalence for every selected class. The training quota
+is reduced when necessary to leave those positives available downstream. With
+a 5,000-image test set, this reserves at least 250 known positives for every
+selected class:
 
 ```text
 saved_vectors/train/    original labeled training data
@@ -193,7 +236,8 @@ For each class, the pipeline:
 - repeats until every learning image has one out-of-fold decision score
 - fits a sigmoid calibrator on all out-of-fold scores at the natural class frequency
 - tunes `C` again, mines hard negatives, and refits the final logistic classifier on the complete train set
-- derives a class-specific threshold targeting 80% precision
+- derives a class-specific threshold from out-of-fold predictions by maximizing
+  balanced accuracy (equivalently, Youden's J statistic)
 
 The main pipeline selects one global `C` jointly with lambda and selected-data
 trust using the original-training cross-validation sweep. Its initial grid is:
@@ -202,8 +246,9 @@ trust using the original-training cross-validation sweep. Its initial grid is:
 C_VALUES = [0.0001, 0.001, 0.01, 0.1, 1.0, 10.0]
 ```
 
-Smaller `C` values apply stronger regularization. If the raw optimum is on a
-`C` boundary, the grid expands automatically by another decade and continues.
+Smaller `C` values apply stronger regularization. If the raw optimum for `C`,
+lambda, or selected-data weight is on either boundary, that grid expands by
+another decade in the required direction and the sweep continues.
 The selected global `C` is then used by all final out-of-fold-calibrated class
 models. There is no separate `TUNE_CLASSIFIER_REGULARIZATION` switch or
 `FIXED_CLASSIFIER_C` override in `main.py`, preventing a second tuning mechanism
@@ -257,22 +302,30 @@ saved_vectors/retrain/subset_probability_evaluation_metrics.csv
 
 ## Baseline and Augmented Calibration
 
-After subset optimization, `dual_model_calibration.py` creates two separately
+After subset optimization, `dual_model_calibration.py` creates three separately
 calibrated probability models:
 
 ```text
 M_0 = original labeled train images
 M_1 = original labeled train images + newly labeled selected retrain images
+M_rand = original labeled train images + an equal-size random forced-positive sample
 ```
 
 Only paths present in `optimization_selection.csv` are added to `M_1`. A
 selected image is added once even when it was selected for multiple subsets.
+`M_rand` samples without replacement and uses exactly the same number of unique
+augmentation images as `M_1`. Each image's forced-positive class is also drawn
+independently and uniformly at random, with no class-balancing constraint, and
+is treated as positive even when that class is absent from the COCO annotation.
+Real labels for other classes are preserved. Its seed is the recorded
+data-selection seed, and its training manifest records every forced-positive
+assignment.
 Its COCO multi-label metadata supplies the newly revealed labels. The module
 raises an error if a selected path does not belong to the current retrain
 split, which prevents an old selection file from being combined with a new
 random split.
 
-Both models independently fit their scaler, fold-safe hard-negative models,
+All three models independently fit their scaler, fold-safe hard-negative models,
 out-of-fold sigmoid calibrators, and class thresholds. This stage saves the
 models and calibration records but does not score or compare them.
 
@@ -288,10 +341,13 @@ saved_models/calibrated/M_0_training_manifest.csv
 saved_models/calibrated/M_1.joblib
 saved_models/calibrated/M_1_calibration_metrics.csv
 saved_models/calibrated/M_1_training_manifest.csv
+saved_models/calibrated/M_rand.joblib
+saved_models/calibrated/M_rand_calibration_metrics.csv
+saved_models/calibrated/M_rand_training_manifest.csv
 ```
 
 After saving the models, `main.py` also classifies every image in the untouched
-test split with both calibrations and organizes copies into:
+test split with all three calibrations and organizes copies into:
 
 ```text
 _organized_calibrated_images/
@@ -303,14 +359,20 @@ _organized_calibrated_images/
     person/
     dog/
     ...
+  M_rand/
+    ...
 ```
 
 Each model folder contains a `prediction_manifest.csv` recording only the
 predicted folder assignment. This export reads test embeddings and image paths,
 but does not use true test labels or calculate accuracy, calibration, or model
 comparison metrics.
+If no selected class exceeds its optimized decision threshold, the image is
+assigned `predicted_label_id=-1`, `predicted_label_name=negative`, and exported
+to the model's `negative/` folder. The model is therefore not forced to call
+every image one of the selected classes.
 
-After both models are saved, `main.py` automatically compares them using the
+After all three models are saved, `main.py` automatically compares them using the
 true multi-label annotations of the untouched test fold. The evaluator can
 also be rerun independently with:
 
@@ -322,43 +384,64 @@ This writes completely separate macro- and micro-ROC graphs and supporting AUC
 tables to:
 
 ```text
-_organized_calibrated_images/AUC_evaluation/auc_macro.png
-_organized_calibrated_images/AUC_evaluation/auc_micro.png
-_organized_calibrated_images/AUC_evaluation/auc_summary.csv
-_organized_calibrated_images/AUC_evaluation/auc_per_class.csv
+_organized_calibrated_images/AUC_evaluation/_model_comparison.png
+_organized_calibrated_images/AUC_evaluation/_model_comparison.csv
 ```
 
 Classes without both a positive and negative test example are excluded because
 ROC AUC is undefined for those classes.
 
-The paired bootstrap test has been removed.
+No bootstrap comparison is run. Model quality is reported directly on the
+untouched test fold using per-model AUC and accuracy.
+
+The main pipeline exposes the selection-size search grid in `main.py`:
+
+```python
+K_VALUES = tuple(range(20, 201, 20))
+```
+
+The sweep first selects lambda, `C`, and the trust weight using 40 ranked images
+per class. It then freezes those three values,
+generates the full 200-image ranking only for that winning configuration, tests
+every nonzero 20-image prefix, and chooses one global `K` by cross-validated ROC
+AUC. If the same image is selected for multiple classes, it is included only
+once when training `M_1`.
+
+`_model_comparison.csv` is the single numerical results file. Its `overall`
+rows report macro and micro AUC, macro and micro thresholded accuracy, and
+exact-match multi-label accuracy. Its `class` rows report AUC and binary
+accuracy for every model and evaluated class, including changes from `M_0`.
+`_model_comparison.png` is one dashboard containing macro ROC, micro ROC,
+overall accuracy, and per-class accuracy for all three models.
+Accuracy uses each model's class-specific decision thresholds. These thresholds
+maximize balanced accuracy on out-of-fold training predictions and are fixed
+before the untouched test set is evaluated; the test labels never tune them.
 
 ## Hyperparameter sweep and sensitivity
 
 Run `python hyperparameter_sweep.py` to sweep lambda, the selected/re-labeled
-data trust weight, and logistic-regression L2 inverse regularization `C`.
+data trust weight, logistic-regression L2 inverse regularization `C`, and the
+per-class selection count K. K is searched from 20 through 200 in increments
+of 20; zero is excluded.
+The winning configuration is the one with the highest mean cross-validated
+macro ROC AUC; mean micro ROC AUC breaks ties. Lambda, `C`, and trust are chosen
+at K=40 first. They are then held fixed while one global K is selected for all
+classes, and the main pipeline uses that exact-cardinality value.
 Trust is searched logarithmically from `0.001` through `1.0`; `C` is searched
 from `0.0001` through `10.0` to cover stronger L2 regularization after the
 previous optimum landed on the lower boundary. Lambda, trust, and `C` are all
-shown on logarithmic sensitivity axes. The saved best-parameter record flags
-any raw optimum that still lands on a grid boundary so the range can be
-expanded again before drawing a final conclusion.
-For `C`, expansion is automatic: if the raw highest-mean-macro-AUC setting is
-the current minimum or maximum, the sweep adds another decade in that direction
-and evaluates it. This repeats until the raw optimum is interior. Every baseline
-fit, progress update, and final selection prints the active `C`. A bounded
-safety guard raises an error after eight consecutive boundary expansions rather
+shown on logarithmic sensitivity axes. A boundary optimum adds another decade
+below the minimum or above the maximum and evaluates it. Multiple boundary
+parameters expand together. This repeats until all three optima are interior.
+A safety guard raises an error after five consecutive expansion rounds rather
 than allowing an accidental endless search.
+Lambda has a hard lower bound of `1e-4`; downward expansion stops there, and a
+lambda optimum at that constrained minimum is accepted.
 Selection uses three-fold cross-validation entirely within the original
 training set. Each fold contains labeled-base, simulated-unlabeled candidate,
 and untouched validation roles. The real retrain and test labels are not used
-to choose hyperparameters. The combination with the highest mean macro AUC is
-used to define a one-standard-error acceptance threshold. Among configurations
-within one standard error of that maximum, the sweep chooses the safer option:
-lower selected-data trust, smaller `C` (stronger L2 regularization), lambda
-closer to the positive grid's logarithmic center, and fewer selected images.
-Macro and then micro AUC break any remaining tie. Both the raw maximum and the
-one-standard-error selection are saved for auditing.
+to choose hyperparameters. The combination with the highest mean macro ROC AUC
+is selected directly, with mean micro ROC AUC used as a tie-breaker.
 
 Each `(fold, C)` baseline is fully out-of-fold calibrated so lambda always
 multiplies the same calibrated `log(P)` quantity used by the final optimizer.

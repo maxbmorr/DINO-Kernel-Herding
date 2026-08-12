@@ -69,6 +69,7 @@ def calibrate_baseline_and_augmented_models(
     baseline_model=None,
     selected_class_names=None,
     selected_data_weight=1.0,
+    random_state=42,
 ):
     training_dir = _resolve_path(training_dir)
     retraining_dir = _resolve_path(retraining_dir)
@@ -146,4 +147,63 @@ def calibrate_baseline_and_augmented_models(
     )
     _save_model(output_dir, "M_1", model_1, manifest_1)
 
-    return model_0, model_1
+    rng = np.random.default_rng(random_state)
+    random_indices = np.sort(rng.choice(
+        len(X_retraining), size=len(selected_indices), replace=False
+    ))
+    random_metadata = retraining_metadata.iloc[random_indices].reset_index(drop=True)
+    forced_class_rows = class_mapping.iloc[
+        rng.integers(0, len(class_mapping), size=len(random_indices))
+    ].reset_index(drop=True)
+    random_metadata["forced_positive_label_id"] = forced_class_rows[
+        "label_id"
+    ].astype(int)
+    random_metadata["forced_positive_label_name"] = forced_class_rows[
+        "label_name"
+    ].astype(str)
+    for row_index, row in random_metadata.iterrows():
+        forced_id = str(int(row["forced_positive_label_id"]))
+        forced_name = str(row["forced_positive_label_name"])
+        label_ids = {
+            value for value in str(row.get("all_label_ids", "")).split("|")
+            if value and value.lower() != "nan"
+        }
+        label_names = {
+            value for value in str(row.get("all_label_names", "")).split("|")
+            if value and value.lower() != "nan"
+        }
+        label_ids.add(forced_id)
+        label_names.add(forced_name)
+        random_metadata.at[row_index, "all_label_ids"] = "|".join(
+            sorted(label_ids, key=int)
+        )
+        random_metadata.at[row_index, "all_label_names"] = "|".join(
+            sorted(label_names)
+        )
+    print(
+        f"Calibrating M_rand on {len(X_learning)} original plus "
+        f"{len(random_indices)} randomly selected, forced-positive images "
+        f"(seed={random_state})"
+    )
+    model_rand = sp.fit_subset_probability_model_from_data(
+        np.concatenate([X_learning, X_retraining[random_indices]], axis=0),
+        pd.concat([learning_metadata, random_metadata], ignore_index=True),
+        class_mapping,
+        sample_weight=np.concatenate([
+            np.ones(len(X_learning), dtype=float),
+            np.full(len(random_indices), selected_data_weight, dtype=float),
+        ]),
+        **common_fit_arguments,
+    )
+    manifest_rand = pd.concat(
+        [
+            manifest_0,
+            random_metadata[[
+                "path", "forced_positive_label_id", "forced_positive_label_name"
+            ]].assign(training_source="random_forced_positive"),
+        ],
+        ignore_index=True,
+    )
+    _save_model(output_dir, "M_rand", model_rand, manifest_rand)
+
+    return model_0, model_1, model_rand

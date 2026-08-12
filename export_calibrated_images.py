@@ -23,10 +23,23 @@ def _model_predictions(model, X):
         model.classifiers_by_class[int(label_id)].calibrated_probability(X_scaled)
         for label_id in model.class_ids
     ])
-    best_positions = np.argmax(probabilities, axis=1)
-    return model.class_ids[best_positions], [
+    thresholds = np.asarray([
+        model.classifiers_by_class[int(label_id)].threshold
+        for label_id in model.class_ids
+    ])
+    passes_threshold = probabilities >= thresholds[None, :]
+    passes_any_threshold = passes_threshold.any(axis=1)
+    # Choose only among classes that passed their own threshold. This matters
+    # because independently optimized class thresholds can differ substantially.
+    eligible_probabilities = np.where(passes_threshold, probabilities, -np.inf)
+    best_positions = np.argmax(eligible_probabilities, axis=1)
+    predicted_ids = model.class_ids[best_positions].astype(int)
+    predicted_names = np.asarray([
         model.class_names[position] for position in best_positions
-    ]
+    ], dtype=object)
+    predicted_ids[~passes_any_threshold] = -1
+    predicted_names[~passes_any_threshold] = "negative"
+    return predicted_ids, predicted_names.tolist()
 
 
 def _export_model_predictions(model_name, model, X_test, paths, output_dir):
@@ -69,6 +82,7 @@ def _export_model_predictions(model_name, model, X_test, paths, output_dir):
 def export_calibrated_test_images(
     model_0,
     model_1,
+    model_rand,
     test_dir="saved_vectors/test",
     output_dir=OUTPUT_DIR,
 ):
@@ -76,7 +90,7 @@ def export_calibrated_test_images(
     if not output_dir.is_absolute():
         output_dir = ut.PROJECT_ROOT / output_dir
     output_dir.mkdir(parents=True, exist_ok=True)
-    for model_name in ("M_0", "M_1"):
+    for model_name in ("M_0", "M_1", "M_rand"):
         model_dir = output_dir / model_name
         if model_dir.exists():
             shutil.rmtree(model_dir)
@@ -88,5 +102,6 @@ def export_calibrated_test_images(
     paths = pd.read_csv(test_dir / "metadata.csv", usecols=["path"])["path"]
     _export_model_predictions("M_0", model_0, X_test, paths, output_dir)
     _export_model_predictions("M_1", model_1, X_test, paths, output_dir)
+    _export_model_predictions("M_rand", model_rand, X_test, paths, output_dir)
     print("No test labels or evaluation metrics were used during export.")
     return output_dir
