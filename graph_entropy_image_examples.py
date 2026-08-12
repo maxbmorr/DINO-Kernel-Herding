@@ -24,6 +24,7 @@ CLASS_GALLERY_DIR = OUTPUT_DIR / "selection_entropy_by_class"
 QUALITATIVE_PATH = OUTPUT_DIR / "_qualitative_ranked_entropy_selections.png"
 QUALITATIVE_TABLE_PATH = OUTPUT_DIR / "_qualitative_ranked_entropy_selections.csv"
 QUALITATIVE_PER_CLASS = 10
+QUALITATIVE_TRAINING_PER_CLASS = 3
 EXAMPLES_PER_GROUP = 3
 GALLERY_COUNT = 50
 
@@ -306,7 +307,7 @@ def create_all_selected_galleries(columns=10):
     return outputs
 
 
-def create_ranked_entropy_qualitative(per_class=QUALITATIVE_PER_CLASS):
+def _create_ranked_entropy_qualitative_unfiltered(per_class=QUALITATIVE_PER_CLASS):
     selection = pd.read_csv(SELECTION_PATH)
     retrain_metadata = pd.read_csv(
         ut.PROJECT_ROOT / "saved_vectors" / "retrain" / "metadata.csv"
@@ -376,6 +377,124 @@ def create_ranked_entropy_qualitative(per_class=QUALITATIVE_PER_CLASS):
     figure.savefig(QUALITATIVE_PATH, dpi=200, bbox_inches="tight")
     plt.close(figure)
     print(f"Saved ranked qualitative entropy result -> {QUALITATIVE_PATH}")
+    return QUALITATIVE_PATH
+
+
+def create_ranked_entropy_qualitative(
+    per_class=QUALITATIVE_PER_CLASS,
+    training_per_class=QUALITATIVE_TRAINING_PER_CLASS,
+):
+    train_vectors = np.load(TRAIN_DIR / "vectors.npy")
+    train_metadata = pd.read_csv(TRAIN_DIR / "metadata.csv")
+    train_scaled = StandardScaler().fit_transform(train_vectors)
+    gamma = 1.0 / train_scaled.shape[1]
+    selection = pd.read_csv(SELECTION_PATH)
+    retrain_metadata = pd.read_csv(
+        ut.PROJECT_ROOT / "saved_vectors" / "retrain" / "metadata.csv"
+    )
+    selection = selection.merge(
+        retrain_metadata[["path", "all_label_ids", "all_label_names"]],
+        on="path", how="left",
+    )
+    selection["target_class_present"] = selection.apply(
+        lambda row: str(int(row["subset_label_id"]))
+        in str(row.get("all_label_ids", "")).split("|"), axis=1,
+    )
+
+    groups = []
+    class_pairs = selection[
+        ["subset_label_id", "subset_label_name"]
+    ].drop_duplicates().sort_values("subset_label_name")
+    for class_row in class_pairs.itertuples(index=False):
+        label_id = int(class_row.subset_label_id)
+        class_name = str(class_row.subset_label_name)
+        positions = np.flatnonzero(_has_label(train_metadata, label_id))
+        count = min(training_per_class, len(positions))
+        references = opt.kernel_herd_reference_subset(
+            train_scaled[positions], count, "rbf", gamma
+        )
+        reference_positions = []
+        for vector in references:
+            local = int(np.argmin(
+                np.linalg.norm(train_scaled[positions] - vector, axis=1)
+            ))
+            reference_positions.append(int(positions[local]))
+        training = train_metadata.iloc[reference_positions].copy()
+        training["subset_label_id"] = label_id
+        training["subset_label_name"] = class_name
+        training["source_type"] = "known_positive_training"
+        training["display_rank"] = np.arange(1, len(training) + 1)
+        training["entropy_rank_within_class"] = np.nan
+        training["optimization_rank"] = np.nan
+        training["von_neumann_entropy_gain"] = np.nan
+        training["positive_probability"] = np.nan
+        training["target_class_present"] = True
+
+        ranked = selection[
+            (selection["subset_label_id"] == label_id)
+            & selection["target_class_present"]
+        ].sort_values(
+            ["von_neumann_entropy_gain", "optimization_rank"],
+            ascending=[False, True],
+        ).head(per_class).copy()
+        if len(ranked) < per_class:
+            raise ValueError(
+                f"Class {class_name!r} has only {len(ranked)} selected true positives; "
+                f"{per_class} were requested."
+            )
+        ranked["source_type"] = "selected_true_positive"
+        ranked["entropy_rank_within_class"] = np.arange(1, len(ranked) + 1)
+        ranked["display_rank"] = training_per_class + ranked["entropy_rank_within_class"]
+        groups.extend([training, ranked])
+
+    qualitative = pd.concat(groups, ignore_index=True, sort=False)
+    qualitative.to_csv(QUALITATIVE_TABLE_PATH, index=False)
+    class_names = sorted(qualitative["subset_label_name"].unique())
+    total_columns = training_per_class + per_class
+    figure, axes = plt.subplots(
+        len(class_names), total_columns,
+        figsize=(2.35 * total_columns, 3.25 * len(class_names)), squeeze=False,
+    )
+    for row_index, class_name in enumerate(class_names):
+        class_data = qualitative[
+            qualitative["subset_label_name"] == class_name
+        ].sort_values("display_rank")
+        for column, item in enumerate(class_data.itertuples(index=False)):
+            axis = axes[row_index, column]
+            axis.imshow(_open_square(item.path, size=340))
+            for spine in axis.spines.values():
+                spine.set_visible(True)
+                spine.set_linewidth(3)
+                spine.set_edgecolor(
+                    "#555555" if item.source_type == "known_positive_training"
+                    else "#2e8b57"
+                )
+            labels = str(item.all_label_names).replace("|", ", ")
+            if len(labels) > 30:
+                labels = labels[:27] + "..."
+            if item.source_type == "known_positive_training":
+                title = f"Training positive {column + 1}\nTrue: {labels}"
+            else:
+                title = (
+                    f"Entropy rank {int(item.entropy_rank_within_class)} "
+                    f"(selection #{int(item.optimization_rank)})\n"
+                    rf"$\Delta H={item.von_neumann_entropy_gain:.2e}$" "\n"
+                    f"True: {labels}"
+                )
+            axis.set_title(title, fontsize=7.8)
+            axis.set_xticks([])
+            axis.set_yticks([])
+        axes[row_index, 0].set_ylabel(class_name, fontsize=11, fontweight="bold")
+
+    figure.suptitle(
+        "Qualitative results: training references and highest-entropy selected true positives\n"
+        "All displayed selected images contain their assigned target class",
+        fontsize=16,
+    )
+    figure.tight_layout(rect=(0, 0, 1, 0.92))
+    figure.savefig(QUALITATIVE_PATH, dpi=200, bbox_inches="tight")
+    plt.close(figure)
+    print(f"Saved true-positive qualitative entropy result -> {QUALITATIVE_PATH}")
     return QUALITATIVE_PATH
 
 

@@ -472,9 +472,11 @@ every selected image in optimization-rank order. Border color reports whether
 the target class was revealed to be present, and title color reports whether
 the total selection objective gain was positive or negative.
 For a compact qualitative result, the script creates
-`_qualitative_ranked_entropy_selections.png` and its matching CSV. It shows the
-ten selected images with the greatest marginal entropy increase for each class,
-ranked left-to-right, with their revealed COCO labels printed on every tile.
+`_qualitative_ranked_entropy_selections.png` and its matching CSV. Each class
+row begins with three kernel-herded known-positive training examples, followed
+by the ten selected true positives with the greatest marginal entropy increase,
+ranked left-to-right. Revealed COCO labels are printed on every tile; selected
+false positives are excluded from this figure.
 
 Important columns in `subset_probability_scores.csv`:
 
