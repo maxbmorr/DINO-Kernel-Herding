@@ -455,6 +455,13 @@ remaining.
 Results, the selected configuration, and one-at-a-time sensitivity graphs are
 written under `_hyperparameter_sensitivity/`.
 
+Run `python graph_entropy_image_examples.py` to create a qualitative panel that
+contrasts kernel-herded labeled references with the selected candidates having
+the largest positive marginal entropy gains for each class. Each selected image
+is annotated with its optimization rank, entropy gain, and positive-class
+probability. The PNG and its source table are written under
+`_organized_calibrated_images/AUC_evaluation/`.
+
 Important columns in `subset_probability_scores.csv`:
 
 - `path`: image path
