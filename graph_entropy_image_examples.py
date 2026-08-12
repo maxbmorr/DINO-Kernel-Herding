@@ -1,4 +1,5 @@
 from pathlib import Path
+import re
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -19,6 +20,7 @@ OUTPUT_PATH = OUTPUT_DIR / "_selection_entropy_image_examples.png"
 TABLE_PATH = OUTPUT_DIR / "_selection_entropy_image_examples.csv"
 GALLERY_PATH = OUTPUT_DIR / "_selection_entropy_top_50_gallery.png"
 GALLERY_TABLE_PATH = OUTPUT_DIR / "_selection_entropy_top_50_gallery.csv"
+CLASS_GALLERY_DIR = OUTPUT_DIR / "selection_entropy_by_class"
 EXAMPLES_PER_GROUP = 3
 GALLERY_COUNT = 50
 
@@ -231,6 +233,77 @@ def create_selected_gallery(gallery_count=GALLERY_COUNT, columns=10):
     return GALLERY_PATH
 
 
+def _safe_filename(value):
+    return re.sub(r"[^A-Za-z0-9._-]+", "_", str(value)).strip("_") or "class"
+
+
+def create_all_selected_galleries(columns=10):
+    selection = pd.read_csv(SELECTION_PATH)
+    retrain_metadata = pd.read_csv(
+        ut.PROJECT_ROOT / "saved_vectors" / "retrain" / "metadata.csv"
+    )
+    selection = selection.merge(
+        retrain_metadata[["path", "all_label_ids", "all_label_names"]],
+        on="path", how="left",
+    )
+    selection["target_class_present"] = selection.apply(
+        lambda row: str(int(row["subset_label_id"]))
+        in str(row.get("all_label_ids", "")).split("|"),
+        axis=1,
+    )
+    CLASS_GALLERY_DIR.mkdir(parents=True, exist_ok=True)
+    outputs = []
+
+    for class_name, class_data in selection.groupby("subset_label_name", sort=True):
+        class_data = class_data.sort_values("optimization_rank").reset_index(drop=True)
+        class_data.insert(0, "gallery_position", np.arange(1, len(class_data) + 1))
+        safe_name = _safe_filename(class_name)
+        table_path = CLASS_GALLERY_DIR / f"{safe_name}_all_selected.csv"
+        image_path = CLASS_GALLERY_DIR / f"{safe_name}_all_selected.png"
+        class_data.to_csv(table_path, index=False)
+
+        rows = int(np.ceil(len(class_data) / columns))
+        figure, axes = plt.subplots(
+            rows, columns, figsize=(2.2 * columns, 2.55 * rows), squeeze=False
+        )
+        axes = axes.ravel()
+        for axis, item in zip(axes, class_data.itertuples(index=False)):
+            axis.imshow(_open_square(item.path, size=280))
+            present = bool(item.target_class_present)
+            border = "#2e8b57" if present else "#d1495b"
+            for spine in axis.spines.values():
+                spine.set_visible(True)
+                spine.set_linewidth(3)
+                spine.set_edgecolor(border)
+            gain_color = "#2e8b57" if item.objective_gain >= 0 else "#d1495b"
+            axis.set_title(
+                f"rank {int(item.optimization_rank)}\n"
+                rf"$\Delta H={item.von_neumann_entropy_gain:.1e}$ · "
+                rf"$\hat P_+={item.positive_probability:.2f}$",
+                fontsize=7.2, color=gain_color,
+            )
+            axis.set_xticks([])
+            axis.set_yticks([])
+        for axis in axes[len(class_data):]:
+            axis.axis("off")
+
+        positives = int(class_data["target_class_present"].sum())
+        figure.suptitle(
+            f"{class_name}: all {len(class_data)} selected images "
+            f"({positives} target-present, {len(class_data) - positives} target-absent)\n"
+            "Green border: target present · Red border: target absent · "
+            "Title color: positive/negative net gain",
+            fontsize=14,
+        )
+        figure.tight_layout(rect=(0, 0, 1, 0.965))
+        figure.savefig(image_path, dpi=180, bbox_inches="tight")
+        plt.close(figure)
+        outputs.append(image_path)
+        print(f"Saved complete class gallery -> {image_path}")
+    return outputs
+
+
 if __name__ == "__main__":
     create_entropy_image_examples()
     create_selected_gallery()
+    create_all_selected_galleries()

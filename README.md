@@ -466,6 +466,11 @@ gallery of 50 unique positive-entropy-gain selections. Green borders indicate
 that the target class was present after labeling; red borders indicate that it
 was absent. The corresponding rows are saved in
 `_selection_entropy_top_50_gallery.csv`.
+It additionally creates a `selection_entropy_by_class/` directory containing
+one PNG and CSV per selected class. These class-specific galleries include
+every selected image in optimization-rank order. Border color reports whether
+the target class was revealed to be present, and title color reports whether
+the total selection objective gain was positive or negative.
 
 Important columns in `subset_probability_scores.csv`:
 
