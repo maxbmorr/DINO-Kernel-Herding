@@ -17,7 +17,10 @@ SELECTION_PATH = (
 OUTPUT_DIR = ut.PROJECT_ROOT / "_organized_calibrated_images" / "AUC_evaluation"
 OUTPUT_PATH = OUTPUT_DIR / "_selection_entropy_image_examples.png"
 TABLE_PATH = OUTPUT_DIR / "_selection_entropy_image_examples.csv"
+GALLERY_PATH = OUTPUT_DIR / "_selection_entropy_top_50_gallery.png"
+GALLERY_TABLE_PATH = OUTPUT_DIR / "_selection_entropy_top_50_gallery.csv"
 EXAMPLES_PER_GROUP = 3
+GALLERY_COUNT = 50
 
 
 def _open_square(path, size=420):
@@ -146,5 +149,88 @@ def create_entropy_image_examples(examples_per_group=EXAMPLES_PER_GROUP):
     return OUTPUT_PATH
 
 
+def create_selected_gallery(gallery_count=GALLERY_COUNT, columns=10):
+    selection = pd.read_csv(SELECTION_PATH)
+    retrain_metadata = pd.read_csv(
+        ut.PROJECT_ROOT / "saved_vectors" / "retrain" / "metadata.csv"
+    )
+    selection = selection[selection["von_neumann_entropy_gain"] > 0].copy()
+    selection = selection.merge(
+        retrain_metadata[["path", "all_label_ids", "all_label_names"]],
+        on="path", how="left",
+    )
+    selection = selection.sort_values(
+        ["von_neumann_entropy_gain", "optimization_rank"],
+        ascending=[False, True],
+    )
+
+    # Round-robin across classes so one class cannot dominate the gallery.
+    groups = {
+        name: group.reset_index(drop=True)
+        for name, group in selection.groupby("subset_label_name", sort=True)
+    }
+    chosen = []
+    used_paths = set()
+    depth = 0
+    while len(chosen) < gallery_count:
+        added = False
+        for group in groups.values():
+            if depth >= len(group):
+                continue
+            row = group.iloc[depth]
+            if row["path"] not in used_paths:
+                chosen.append(row)
+                used_paths.add(row["path"])
+                added = True
+                if len(chosen) == gallery_count:
+                    break
+        if not added and all(depth + 1 >= len(group) for group in groups.values()):
+            break
+        depth += 1
+    gallery = pd.DataFrame(chosen).reset_index(drop=True)
+    gallery["target_class_present"] = gallery.apply(
+        lambda row: str(int(row["subset_label_id"]))
+        in str(row.get("all_label_ids", "")).split("|"),
+        axis=1,
+    )
+    gallery.insert(0, "gallery_position", np.arange(1, len(gallery) + 1))
+    gallery.to_csv(GALLERY_TABLE_PATH, index=False)
+
+    rows = int(np.ceil(len(gallery) / columns))
+    figure, axes = plt.subplots(rows, columns, figsize=(2.25 * columns, 2.65 * rows))
+    axes = np.asarray(axes).reshape(-1)
+    for axis, item in zip(axes, gallery.itertuples(index=False)):
+        axis.imshow(_open_square(item.path, size=300))
+        present = bool(item.target_class_present)
+        border = "#2e8b57" if present else "#d1495b"
+        for spine in axis.spines.values():
+            spine.set_visible(True)
+            spine.set_linewidth(3)
+            spine.set_edgecolor(border)
+        axis.set_title(
+            f"{item.subset_label_name} · rank {int(item.optimization_rank)}\n"
+            rf"$\Delta H={item.von_neumann_entropy_gain:.1e}$ · "
+            rf"$\hat P_+={item.positive_probability:.2f}$",
+            fontsize=7.5,
+        )
+        axis.set_xticks([])
+        axis.set_yticks([])
+    for axis in axes[len(gallery):]:
+        axis.axis("off")
+
+    figure.suptitle(
+        f"Top {len(gallery)} unique selected images with positive entropy gain\n"
+        "Green border: target present after labeling · Red border: target absent",
+        fontsize=15,
+    )
+    figure.tight_layout(rect=(0, 0, 1, 0.95))
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    figure.savefig(GALLERY_PATH, dpi=200, bbox_inches="tight")
+    plt.close(figure)
+    print(f"Saved selected-image gallery -> {GALLERY_PATH}")
+    return GALLERY_PATH
+
+
 if __name__ == "__main__":
     create_entropy_image_examples()
+    create_selected_gallery()

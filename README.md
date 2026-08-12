@@ -461,6 +461,11 @@ the largest positive marginal entropy gains for each class. Each selected image
 is annotated with its optimization rank, entropy gain, and positive-class
 probability. The PNG and its source table are written under
 `_organized_calibrated_images/AUC_evaluation/`.
+The same script also creates `_selection_entropy_top_50_gallery.png`, a balanced
+gallery of 50 unique positive-entropy-gain selections. Green borders indicate
+that the target class was present after labeling; red borders indicate that it
+was absent. The corresponding rows are saved in
+`_selection_entropy_top_50_gallery.csv`.
 
 Important columns in `subset_probability_scores.csv`:
 
