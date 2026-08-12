@@ -21,6 +21,9 @@ TABLE_PATH = OUTPUT_DIR / "_selection_entropy_image_examples.csv"
 GALLERY_PATH = OUTPUT_DIR / "_selection_entropy_top_50_gallery.png"
 GALLERY_TABLE_PATH = OUTPUT_DIR / "_selection_entropy_top_50_gallery.csv"
 CLASS_GALLERY_DIR = OUTPUT_DIR / "selection_entropy_by_class"
+QUALITATIVE_PATH = OUTPUT_DIR / "_qualitative_ranked_entropy_selections.png"
+QUALITATIVE_TABLE_PATH = OUTPUT_DIR / "_qualitative_ranked_entropy_selections.csv"
+QUALITATIVE_PER_CLASS = 10
 EXAMPLES_PER_GROUP = 3
 GALLERY_COUNT = 50
 
@@ -303,7 +306,81 @@ def create_all_selected_galleries(columns=10):
     return outputs
 
 
+def create_ranked_entropy_qualitative(per_class=QUALITATIVE_PER_CLASS):
+    selection = pd.read_csv(SELECTION_PATH)
+    retrain_metadata = pd.read_csv(
+        ut.PROJECT_ROOT / "saved_vectors" / "retrain" / "metadata.csv"
+    )
+    selection = selection.merge(
+        retrain_metadata[["path", "all_label_ids", "all_label_names"]],
+        on="path", how="left",
+    )
+    selection["target_class_present"] = selection.apply(
+        lambda row: str(int(row["subset_label_id"]))
+        in str(row.get("all_label_ids", "")).split("|"),
+        axis=1,
+    )
+
+    ranked_groups = []
+    for class_name, class_data in selection.groupby("subset_label_name", sort=True):
+        ranked = class_data.sort_values(
+            ["von_neumann_entropy_gain", "optimization_rank"],
+            ascending=[False, True],
+        ).head(per_class).copy()
+        ranked["entropy_rank_within_class"] = np.arange(1, len(ranked) + 1)
+        ranked_groups.append(ranked)
+    qualitative = pd.concat(ranked_groups, ignore_index=True)
+    qualitative.to_csv(QUALITATIVE_TABLE_PATH, index=False)
+
+    class_names = sorted(qualitative["subset_label_name"].unique())
+    figure, axes = plt.subplots(
+        len(class_names), per_class,
+        figsize=(2.45 * per_class, 3.25 * len(class_names)),
+        squeeze=False,
+    )
+    for row_index, class_name in enumerate(class_names):
+        class_data = qualitative[
+            qualitative["subset_label_name"] == class_name
+        ].sort_values("entropy_rank_within_class")
+        for column, item in enumerate(class_data.itertuples(index=False)):
+            axis = axes[row_index, column]
+            axis.imshow(_open_square(item.path, size=340))
+            present = bool(item.target_class_present)
+            border = "#2e8b57" if present else "#d1495b"
+            for spine in axis.spines.values():
+                spine.set_visible(True)
+                spine.set_linewidth(3)
+                spine.set_edgecolor(border)
+            labels = str(item.all_label_names).replace("|", ", ")
+            if len(labels) > 30:
+                labels = labels[:27] + "..."
+            axis.set_title(
+                f"Entropy rank {int(item.entropy_rank_within_class)} "
+                f"(selection #{int(item.optimization_rank)})\n"
+                rf"$\Delta H={item.von_neumann_entropy_gain:.2e}$" "\n"
+                f"True: {labels or 'none'}",
+                fontsize=7.8,
+            )
+            axis.set_xticks([])
+            axis.set_yticks([])
+        axes[row_index, 0].set_ylabel(
+            f"Selected for\n{class_name}", fontsize=11, fontweight="bold"
+        )
+
+    figure.suptitle(
+        "Qualitative results: selected images ranked by marginal entropy increase\n"
+        "Green border: assigned subset is a true label · Red border: assigned subset is absent",
+        fontsize=16,
+    )
+    figure.tight_layout(rect=(0, 0, 1, 0.92))
+    figure.savefig(QUALITATIVE_PATH, dpi=200, bbox_inches="tight")
+    plt.close(figure)
+    print(f"Saved ranked qualitative entropy result -> {QUALITATIVE_PATH}")
+    return QUALITATIVE_PATH
+
+
 if __name__ == "__main__":
     create_entropy_image_examples()
     create_selected_gallery()
     create_all_selected_galleries()
+    create_ranked_entropy_qualitative()
